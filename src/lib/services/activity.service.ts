@@ -8,6 +8,10 @@ import { listActivities, recordActivity, type ActivityFilter } from "@/lib/repos
  * Every meaningful change in the platform lands here — including events that need
  * no human intervention, which are shown to staff as informational entries. The
  * helper never throws: a logging failure must not break the operation it records.
+ *
+ * The stored row keeps one `summary` plus free-form `meta`, matching the schema.
+ * Bilingual callers may pass `summary_ar` / `summary_en`; the Arabic form is used
+ * as the headline and both are preserved inside `meta`.
  */
 
 export interface LogActivityInput {
@@ -18,29 +22,41 @@ export interface LogActivityInput {
   entity_type?: string | null;
   entity_id?: string | null;
   customer_id?: string | null;
+  /** Optional: folded into the entity reference so project history stays readable. */
   project_id?: string | null;
+  summary: string;
   summary_ar?: string | null;
   summary_en?: string | null;
   meta?: unknown;
   ip?: string | null;
+  user_agent?: string | null;
   is_demo?: number;
 }
 
 export async function logActivity(input: LogActivityInput): Promise<ActivityRow | null> {
   try {
+    const headline = input.summary_ar?.trim() || input.summary?.trim() || input.summary_en?.trim() || input.action;
+    const entityType = input.entity_type ?? (input.project_id ? "project" : null);
+    const entityId = input.entity_id ?? input.project_id ?? null;
+
+    const meta: Record<string, unknown> = {};
+    if (input.meta && typeof input.meta === "object") Object.assign(meta, input.meta as Record<string, unknown>);
+    if (input.summary_en && input.summary_en !== headline) meta.summaryEn = input.summary_en;
+    if (input.summary_ar && input.summary_ar !== headline) meta.summaryAr = input.summary_ar;
+    if (input.project_id) meta.projectId = input.project_id;
+
     return await recordActivity({
       actor_type: input.actor_type,
+      action: input.action,
       actor_user_id: input.actor_user_id ?? null,
       actor_label: input.actor_label ?? null,
-      action: input.action,
-      entity_type: input.entity_type ?? null,
-      entity_id: input.entity_id ?? null,
+      entity_type: entityType,
+      entity_id: entityId,
       customer_id: input.customer_id ?? null,
-      project_id: input.project_id ?? null,
-      summary_ar: input.summary_ar ?? null,
-      summary_en: input.summary_en ?? null,
-      meta: input.meta === undefined ? null : JSON.stringify(input.meta),
+      summary: headline,
+      meta: Object.keys(meta).length > 0 ? meta : null,
       ip: input.ip ?? null,
+      user_agent: input.user_agent ?? null,
       is_demo: input.is_demo ?? 0,
     });
   } catch (error) {
@@ -55,9 +71,6 @@ export async function listActivityLog(
   return listActivities(filter);
 }
 
-/** Compact bilingual summary used by the dashboard feed. */
-export function activitySummary(row: ActivityRow, locale: Locale): string {
-  const primary = locale === "ar" ? row.summary_ar : row.summary_en;
-  const secondary = locale === "ar" ? row.summary_en : row.summary_ar;
-  return primary?.trim() || secondary?.trim() || row.action;
+export function activitySummary(row: ActivityRow, _locale: Locale = "ar"): string {
+  return row.summary?.trim() || row.action.replace(/[._]/g, " ");
 }
