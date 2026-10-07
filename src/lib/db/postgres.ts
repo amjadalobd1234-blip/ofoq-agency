@@ -14,14 +14,13 @@ import {
  *
  * It is provided so the platform can move to PostgreSQL by setting
  * DATABASE_DRIVER=postgres and DATABASE_URL, without changes anywhere else.
- * `pg` is an OPTIONAL dependency and is imported lazily, so a SQLite-only
- * installation never needs it:
+ * The `pg` driver is imported lazily so SQLite-only deployments do not open a
+ * PostgreSQL connection. It is included as a runtime dependency for Supabase
+ * deployments.
  *
- *     npm install pg
- *
- * NOTE: this driver is shipped as production intent and has not been executed
- * against a live PostgreSQL server in the current environment. Verify it with
- * `npm run db:migrate` on a staging database before production use.
+ * NOTE: this driver should be verified against a staging PostgreSQL database
+ * before production use; `npm test` covers generated schema consistency but
+ * does not replace a live database migration.
  */
 export class PostgresDriver implements DbDriver {
   readonly dialect: SqlDialect = "postgres";
@@ -36,17 +35,24 @@ export class PostgresDriver implements DbDriver {
   }
 
   static async create(connectionString: string): Promise<PostgresDriver> {
-    let pgModule: { Pool: new (config: { connectionString: string }) => PostgresPool };
+    let pgModule: {
+      Pool: new (config: { connectionString: string }) => PostgresPool;
+      types?: { setTypeParser(oid: number, parser: (value: string) => unknown): void };
+    };
     try {
-      // @ts-expect-error -- 'pg' is an optional dependency, installed only when PostgreSQL is used.
+      // @ts-expect-error -- pg is dynamically imported to keep SQLite startup lazy.
       pgModule = (await import(/* webpackIgnore: true */ "pg")) as never;
     } catch (error) {
       throw new Error(
-        "PostgreSQL was selected (DATABASE_DRIVER=postgres) but the optional 'pg' package is " +
-          "not installed. Run: npm install pg",
+        "PostgreSQL was selected (DATABASE_DRIVER=postgres), but the 'pg' package is not installed. " +
+          "Install project dependencies with npm install.",
         { cause: error },
       );
     }
+    // node-postgres normally returns int8 (OID 20) as a string. The schema uses
+    // BIGINT for SQLite INTEGER values, which the application expects as JS
+    // numbers. Preserve out-of-range values rather than silently losing precision.
+    pgModule.types?.setTypeParser(20, parsePostgresInt8);
     const pool = new pgModule.Pool({ connectionString });
     // Fail fast with a clear message when the database is unreachable.
     await pool.query("SELECT 1");
@@ -195,6 +201,11 @@ export function toPositional(
     out += char;
   }
   return { text: out, values: params.map(normaliseValue) };
+}
+
+export function parsePostgresInt8(value: string): number | string {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : value;
 }
 
 function redact(connectionString: string): string {
