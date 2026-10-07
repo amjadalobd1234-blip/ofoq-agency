@@ -1,0 +1,50 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# next.js
+.next/
+out/
+build/
+dist/
+
+# production env files — never commit real secrets
+.env
+.env.local
+.env.*.local
+.env.production
+
+# database files (local SQLite development data)
+data/
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+
+# uploads / generated storage
+storage/
+uploads/
+!storage/.gitkeep
+
+# logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+
+# testing
+coverage/
+.vitest/
+
+# misc
+.DS_Store
+Thumbs.db
+*.pem
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.tsbuildinfo
+next-env.d.ts

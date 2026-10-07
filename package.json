@@ -1,0 +1,42 @@
+{
+  "name": "ofoq-agency",
+  "version": "0.1.0",
+  "private": true,
+  "description": "أفق — منصة وكالة تسويق رقمي مدعومة بالأتمتة ووكلاء الذكاء الاصطناعي | Ofoq digital marketing agency platform",
+  "scripts": {
+    "dev": "next dev -H 0.0.0.0 -p ${PORT:-3000}",
+    "build": "next build",
+    "start": "next start -H 0.0.0.0 -p ${PORT:-3000}",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:seed": "tsx scripts/seed.ts",
+    "db:reset": "tsx scripts/reset.ts",
+    "db:status": "tsx scripts/migrate.ts --status",
+    "setup": "npm run db:migrate && npm run db:seed",
+    "cron:daily": "tsx scripts/daily-reports.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "jose": "^5.9.6",
+    "next": "^15.5.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.0",
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tailwindcss": "^4.1.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  }
+}
