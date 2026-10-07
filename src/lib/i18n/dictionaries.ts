@@ -375,7 +375,7 @@ const ar = {
     legal: "الشروط والخصوصية",
     localeNote: "الموقع متاح بالعربية والإنجليزية.",
   },
-} as const;
+};
 
 type DictShape = typeof ar;
 

@@ -28,6 +28,7 @@ export const CAPABILITIES = [
   "services.manage",
   "invoices.view",
   "invoices.manage",
+  "payments.manage",
   "payments.record",
   "payments.refund",
   "subscriptions.view",

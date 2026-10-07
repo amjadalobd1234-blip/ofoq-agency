@@ -2,24 +2,25 @@ import { cookies } from "next/headers";
 
 import { getEnv } from "@/lib/config/env";
 import { addHours, nowIso } from "@/lib/core/date";
-import { randomToken, sha256 } from "@/lib/core/ids";
 import { UnauthenticatedError } from "@/lib/core/errors";
-import type { AuthenticatedUser, UserRow } from "@/lib/domain/types";
+import { randomToken, sha256 } from "@/lib/core/ids";
+import type { SessionRow } from "@/lib/domain/types";
 import {
   createSession,
   findSessionByTokenHash,
-  findUserById,
   revokeSession,
   revokeUserSessions,
   touchSession,
 } from "@/lib/repositories/identity.repo";
 
 /**
- * Session handling.
+ * HTTP session plumbing.
  *
- * The cookie carries a random token; the database stores only its SHA-256 digest,
- * so a database leak cannot be replayed as a login. Sessions expire, are revoked
- * on password change, and every request validates both the session and the user.
+ * This module owns the cookie and the session row only: the token in the cookie is
+ * random, and the database stores just its SHA-256 digest, so a database leak
+ * cannot be replayed as a login. Turning a session into a signed-in user (with the
+ * customer link and capability checks) is the job of `identity.service` and
+ * `auth/permissions`.
  */
 
 export const SESSION_COOKIE = "ofoq_session";
@@ -41,6 +42,10 @@ function cookieOptions(expiresAt: string) {
   };
 }
 
+export function sessionCookieOptions(expiresAt: string) {
+  return cookieOptions(expiresAt);
+}
+
 export async function issueSession(input: {
   userId: string;
   userAgent?: string | null;
@@ -52,7 +57,7 @@ export async function issueSession(input: {
   const expiresAt = addHours(new Date(), env.auth.sessionTtlHours).toISOString();
   const sessionId = crypto.randomUUID();
 
-  // Rotate: a fresh login invalidates the token the browser used before.
+  // Rotation: a fresh login invalidates the token the browser used before.
   if (input.existingToken) {
     const previous = await findSessionByTokenHash(sha256(input.existingToken));
     if (previous) await revokeSession(previous.id);
@@ -83,8 +88,8 @@ export async function currentSessionToken(): Promise<string | null> {
   return store.get(SESSION_COOKIE)?.value ?? null;
 }
 
-/** Resolves the signed-in user, or null. Never throws for an absent session. */
-export async function getCurrentUser(): Promise<AuthenticatedUser | null> {
+/** Resolves the active session row, or null. Never throws for an absent session. */
+export async function getCurrentSession(): Promise<SessionRow | null> {
   const token = await currentSessionToken();
   if (!token) return null;
 
@@ -93,39 +98,19 @@ export async function getCurrentUser(): Promise<AuthenticatedUser | null> {
   if (session.revoked_at) return null;
   if (new Date(session.expires_at).getTime() <= Date.now()) return null;
 
-  const user = await findUserById(session.user_id);
-  if (!user || user.status !== "ACTIVE") return null;
-
   // Throttled "last seen" update — at most once per 5 minutes.
   const lastSeen = new Date(session.last_seen_at).getTime();
   if (Date.now() - lastSeen > 5 * 60_000) {
     await touchSession(session.id, nowIso());
   }
 
-  return user as AuthenticatedUser;
+  return session;
 }
 
-export async function requireCurrentUser(): Promise<AuthenticatedUser> {
-  const user = await getCurrentUser();
-  if (!user) throw new UnauthenticatedError();
-  return user;
-}
-
-/** Staff helper used by the dashboard layout. */
-export async function requireStaffUser(): Promise<AuthenticatedUser> {
-  const user = await requireCurrentUser();
-  if (user.role !== "OWNER" && user.role !== "PARTNER") {
-    throw new UnauthenticatedError("This area is for agency staff.");
-  }
-  return user;
-}
-
-export async function requireClientUser(): Promise<AuthenticatedUser> {
-  const user = await requireCurrentUser();
-  if (user.role !== "CLIENT") {
-    throw new UnauthenticatedError("This area is for client accounts.");
-  }
-  return user;
+export async function requireCurrentSession(): Promise<SessionRow> {
+  const session = await getCurrentSession();
+  if (!session) throw new UnauthenticatedError();
+  return session;
 }
 
 export async function signOutCurrentSession(): Promise<void> {
@@ -137,13 +122,7 @@ export async function signOutCurrentSession(): Promise<void> {
   await clearSessionCookie();
 }
 
-/** Used after a password change or a security event. */
+/** Used after a password change or any other security event. */
 export async function revokeAllSessions(userId: string, exceptSessionId?: string): Promise<number> {
   return revokeUserSessions(userId, exceptSessionId);
 }
-
-export function sessionCookieForTests(token: string, expiresAt: string) {
-  return { name: SESSION_COOKIE, value: token, options: cookieOptions(expiresAt) };
-}
-
-export type { UserRow };

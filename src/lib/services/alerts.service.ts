@@ -149,6 +149,8 @@ export async function acknowledgeAlert(alertId: string, userId: string): Promise
     action: "alert.acknowledged",
     entity_type: "alert",
     entity_id: alertId,
+    summary: "اطّلع فريق الوكالة على التنبيه",
+    summary_en: "Alert acknowledged by the team",
   });
 }
 
@@ -165,7 +167,8 @@ export async function resolveAlert(alertId: string, userId: string, note?: strin
     action: "alert.resolved",
     entity_type: "alert",
     entity_id: alertId,
-    summary: note,
+    summary: note?.trim() || "تمت معالجة التنبيه",
+    summary_en: "Alert resolved",
   });
 }
 

@@ -11,34 +11,52 @@ import {
 /**
  * Email.
  *
- * Every message is written to the outbox first, then delivered through the
- * configured provider. With `EMAIL_PROVIDER=console` (the default) the mail is
- * printed to the server log and marked as sent — so the whole flow is testable
- * before an SMTP/Resend account exists. Nothing here invents a sender: without a
- * configured provider the platform simply uses the console transport.
+ * Every message is written to the outbox first and delivered afterwards, so a
+ * provider outage never loses a notification. With `EMAIL_PROVIDER=console` (the
+ * default) mail is printed to the server log — the whole flow is therefore
+ * testable before any SMTP/Resend account exists, and nothing here pretends to
+ * send through a provider that was never configured.
  */
 
-export interface EmailMessage {
+export interface SendEmailInput {
   to: string;
   subject: string;
-  body: string;
+  text: string;
   html?: string | null;
-  replyTo?: string | null;
+  /** Linked user, so the message is visible on their profile/history. */
+  userId?: string | null;
+  customerId?: string | null;
+  template?: string | null;
+  meta?: unknown;
+  locale?: Locale;
+  isDemo?: number;
 }
 
-export interface BrandContext {
+export interface SendEmailResult {
+  delivered: boolean;
+  queued: boolean;
+  provider: string;
+  outboxId?: string;
+  error?: string;
+}
+
+export interface EmailBrand {
   agencyName: string;
   primary: string;
   accent: string;
 }
 
-const DEFAULT_BRAND: BrandContext = { agencyName: "أفق | Ofoq", primary: "#0b1220", accent: "#c8a24a" };
+export const DEFAULT_EMAIL_BRAND: EmailBrand = { agencyName: "أفق | Ofoq", primary: "#0b1220", accent: "#c8a24a" };
 
-/** Wraps plain text in the shared bilingual, RTL-aware email shell. */
-export function renderEmailHtml(message: EmailMessage, locale: Locale = "ar", brand = DEFAULT_BRAND): string {
+/** The shared bilingual, RTL-aware shell used by every platform email. */
+export function renderEmailHtml(
+  input: { subject: string; text: string; html?: string | null },
+  locale: Locale = "ar",
+  brand: EmailBrand = DEFAULT_EMAIL_BRAND,
+): string {
   const dir = locale === "ar" ? "rtl" : "ltr";
   const align = locale === "ar" ? "right" : "left";
-  const body = (message.html ?? escapeHtml(message.body).replace(/\n/g, "<br />")) as string;
+  const body = input.html ?? escapeHtml(input.text).replace(/\n/g, "<br />");
   return `<!doctype html>
 <html lang="${locale}" dir="${dir}">
   <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /></head>
@@ -54,13 +72,17 @@ export function renderEmailHtml(message: EmailMessage, locale: Locale = "ar", br
           </tr>
           <tr>
             <td style="padding:24px;color:#1b1f2a;font-size:15px;line-height:1.85;text-align:${align};">
-              <h1 style="margin:0 0 12px;font-size:18px;color:${brand.primary};">${escapeHtml(message.subject)}</h1>
+              <h1 style="margin:0 0 12px;font-size:18px;color:${brand.primary};">${escapeHtml(input.subject)}</h1>
               ${body}
             </td>
           </tr>
           <tr>
-            <td style="padding:16px 24px;background:#0b1220;color:#c9ccd6;font-size:12px;text-align:${align};">
-              ${locale === "ar" ? "هذه رسالة من منصة أفق. لا نطلب بيانات بطاقتك عبر البريد." : "This message comes from the Ofoq platform. We never ask for card details by email."}
+            <td style="padding:16px 24px;background:${brand.primary};color:#c9ccd6;font-size:12px;text-align:${align};">
+              ${
+                locale === "ar"
+                  ? "هذه رسالة من منصة أفق. لا نطلب بيانات بطاقتك عبر البريد."
+                  : "This message comes from the Ofoq platform. We never ask for card details by email."
+              }
             </td>
           </tr>
         </table>
@@ -79,38 +101,54 @@ export function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
-/** Queues a message so it is durable even if the provider call fails. */
-export async function enqueueEmail(input: {
-  to: string;
-  subject: string;
-  body: string;
-  html?: string | null;
-  customerId?: string | null;
-  template?: string | null;
-  isDemo?: number;
-}): Promise<OutboxEmailRow> {
-  return queueEmail({
-    to_email: input.to,
-    subject: input.subject,
-    body: input.body,
-    html: input.html ?? null,
-    provider: getEnv().email.provider,
-    customer_id: input.customerId ?? null,
-    template: input.template ?? null,
-    is_demo: input.isDemo ?? 0,
-  });
+/** Queues a message so it survives a provider outage, then delivers it. */
+export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
+  const env = getEnv();
+  const locale = input.locale ?? "ar";
+
+  try {
+    const row = await queueEmail({
+      to_email: input.to,
+      subject: input.subject,
+      text: input.text,
+      html: input.html ?? renderEmailHtml({ subject: input.subject, text: input.text }, locale),
+      template: input.template ?? undefined,
+      to_user_id: input.userId ?? null,
+      provider: env.email.provider,
+      meta: {
+        ...(typeof input.meta === "object" && input.meta !== null ? (input.meta as Record<string, unknown>) : {}),
+        customerId: input.customerId ?? null,
+        isDemo: input.isDemo === 1,
+      },
+    });
+
+    const delivery = await deliverEmail(row);
+    return {
+      delivered: delivery.ok,
+      queued: true,
+      provider: delivery.provider,
+      outboxId: row.id,
+      error: delivery.error,
+    };
+  } catch (error) {
+    // Queuing itself failed: report honestly instead of claiming success.
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error("Failed to queue email", { to: input.to, error: message });
+    return { delivered: false, queued: false, provider: env.email.provider, error: message };
+  }
 }
 
-/** Sends (or prints) one message and updates the outbox row. */
+/** Delivers one queued row and records the outcome on it. */
 export async function deliverEmail(row: OutboxEmailRow): Promise<{ ok: boolean; provider: string; error?: string }> {
   const env = getEnv();
+  const text = row.text ?? "";
 
   try {
     if (env.email.provider === "console") {
       logger.info("[email:console] message delivered to the server log", {
         to: row.to_email,
         subject: row.subject,
-        preview: row.body.slice(0, 400),
+        preview: text.slice(0, 400),
       });
       await markEmailSent(row.id, "console");
       return { ok: true, provider: "console" };
@@ -125,10 +163,10 @@ export async function deliverEmail(row: OutboxEmailRow): Promise<{ ok: boolean; 
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          from: env.email.fromAddress,
+          from: `${env.email.fromName} <${env.email.from}>`,
           to: [row.to_email],
           subject: row.subject,
-          text: row.body,
+          text,
           html: row.html ?? undefined,
         }),
       });
@@ -138,23 +176,24 @@ export async function deliverEmail(row: OutboxEmailRow): Promise<{ ok: boolean; 
     }
 
     if (env.email.provider === "smtp") {
-      if (!env.email.smtpHost) throw new Error("SMTP_HOST is not set");
+      if (!env.email.smtp.host) throw new Error("SMTP_HOST is not set");
       // nodemailer is an optional dependency: install it only when SMTP is used.
-      const nodemailer = await import("nodemailer").catch(() => null);
+      // @ts-expect-error nodemailer is optional and is not part of the default install.
+      const nodemailer = (await import("nodemailer").catch(() => null)) as NodemailerModule | null;
       if (!nodemailer) {
         throw new Error("nodemailer is not installed. Run `npm i nodemailer` and restart to use EMAIL_PROVIDER=smtp.");
       }
       const transport = nodemailer.createTransport({
-        host: env.email.smtpHost,
-        port: env.email.smtpPort,
-        secure: env.email.smtpSecure,
-        auth: env.email.smtpUser ? { user: env.email.smtpUser, pass: env.email.smtpPassword } : undefined,
+        host: env.email.smtp.host,
+        port: env.email.smtp.port,
+        secure: env.email.smtp.secure,
+        auth: env.email.smtp.user ? { user: env.email.smtp.user, pass: env.email.smtp.password } : undefined,
       });
       await transport.sendMail({
-        from: env.email.fromAddress,
+        from: `${env.email.fromName} <${env.email.from}>`,
         to: row.to_email,
         subject: row.subject,
-        text: row.body,
+        text,
         html: row.html ?? undefined,
       });
       await markEmailSent(row.id, "smtp");
@@ -170,8 +209,8 @@ export async function deliverEmail(row: OutboxEmailRow): Promise<{ ok: boolean; 
   }
 }
 
-/** Drains the outbox. Called by the cron entry point and after critical events. */
-export async function processEmailOutbox(limit = 25): Promise<{ sent: number; failed: number }> {
+/** Drains the outbox. Called by the daily job so failures are retried. */
+export async function processOutbox(limit = 25): Promise<{ sent: number; failed: number; attempted: number }> {
   const rows = await listQueuedEmails(limit);
   let sent = 0;
   let failed = 0;
@@ -180,27 +219,11 @@ export async function processEmailOutbox(limit = 25): Promise<{ sent: number; fa
     if (result.ok) sent += 1;
     else failed += 1;
   }
-  return { sent, failed };
+  return { sent, failed, attempted: rows.length };
 }
 
-/** Convenience: queue + attempt immediately (used for transactional mail). */
-export async function sendEmailNow(input: {
-  to: string;
-  subject: string;
-  body: string;
-  locale?: Locale;
-  customerId?: string | null;
-  template?: string | null;
-  isDemo?: number;
-}): Promise<{ ok: boolean; error?: string }> {
-  const locale = input.locale ?? "ar";
-  const row = await enqueueEmail({
-    ...input,
-    html: renderEmailHtml({ to: input.to, subject: input.subject, body: input.body }, locale),
-  });
-  const result = await deliverEmail(row);
-  return { ok: result.ok, error: result.error };
-}
+/** Alias kept for readability at call sites that resend the whole queue. */
+export const processEmailOutbox = processOutbox;
 
 export function emailProviderStatus(): { provider: string; configured: boolean; note: string } {
   const env = getEnv();
@@ -208,7 +231,7 @@ export function emailProviderStatus(): { provider: string; configured: boolean; 
   const configured =
     provider === "console" ||
     (provider === "resend" && Boolean(env.email.resendApiKey)) ||
-    (provider === "smtp" && Boolean(env.email.smtpHost));
+    (provider === "smtp" && Boolean(env.email.smtp.host));
   return {
     provider,
     configured,
@@ -219,4 +242,25 @@ export function emailProviderStatus(): { provider: string; configured: boolean; 
           ? "Provider credentials found in the environment."
           : "Provider selected but its credentials are missing; messages stay queued in the outbox.",
   };
+}
+
+/* --------------------------------------------------------- optional provider -- */
+
+interface SmtpTransport {
+  sendMail(options: {
+    from: string;
+    to: string;
+    subject: string;
+    text: string;
+    html?: string;
+  }): Promise<unknown>;
+}
+
+interface NodemailerModule {
+  createTransport(options: {
+    host: string;
+    port: number;
+    secure: boolean;
+    auth?: { user: string; pass: string };
+  }): SmtpTransport;
 }

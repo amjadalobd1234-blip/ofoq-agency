@@ -86,6 +86,8 @@ export async function markReadForStaff(conversationId: string, userId: string): 
     action: "conversation.read",
     entity_type: "conversation",
     entity_id: conversationId,
+    summary: "قراءة المحادثة من فريق الوكالة",
+    summary_en: "Conversation read by staff",
   });
 }
 
@@ -177,6 +179,8 @@ export async function closeConversation(conversationId: string, userId: string):
     action: "conversation.closed",
     entity_type: "conversation",
     entity_id: conversationId,
+    summary: "إغلاق المحادثة",
+    summary_en: "Conversation closed",
   });
 }
 
