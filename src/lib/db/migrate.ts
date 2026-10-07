@@ -12,9 +12,9 @@ import type { DbDriver, SqlDialect } from "./types";
  * applied file is stored in `_migrations`; editing an already-applied migration
  * is reported as an error instead of being silently ignored.
  *
- * The SQL files target a portable subset shared by SQLite and PostgreSQL. When
- * no dialect-specific directory exists, the SQLite files are translated on the
- * fly (see `transformForDialect`).
+ * SQLite migrations are the canonical schema. PostgreSQL-specific files are
+ * generated from them by `npm run db:generate-postgres`; when a dialect-specific
+ * directory is absent, the SQLite files are translated on the fly.
  */
 
 export interface MigrationFile {
