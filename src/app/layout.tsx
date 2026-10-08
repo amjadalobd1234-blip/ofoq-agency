@@ -5,11 +5,11 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: {
-    default: "أفق | منصة وكالة تسويق رقمي",
-    template: "%s | أفق",
+    default: "أُفق | استوديو إبداعي واستراتيجي",
+    template: "%s | أُفق",
   },
   description:
-    "أفق منصة تساعد وكالات التسويق الرقمي على تنظيم العملاء والمشاريع والعروض ومتابعة العمل في مكان واحد.",
+    "أُفق استوديو إبداعي من العراق، نبني للعلامات الطموحة حضوراً مؤثراً عبر الاستراتيجية والهوية والتجارب الرقمية والنمو.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
