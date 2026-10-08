@@ -34,7 +34,33 @@ export function AuthForm({ mode, locale, nextPath = "/dashboard" }: {
   };
 
   function tellError(error: unknown) {
-    const raw = error instanceof Error ? error.message.toLowerCase() : "";
+    // Fix: show real Supabase error details — error.message, error.code, error.status
+    // Example requested: setError(`خطأ: ${error.message} (code: ${error.code})`)
+    const supabaseError = error as {
+      message?: string;
+      code?: string;
+      status?: number;
+      statusCode?: number;
+      name?: string;
+      __isAuthError?: boolean;
+    } | null;
+    const message =
+      typeof supabaseError?.message === "string" && supabaseError.message.length > 0
+        ? supabaseError.message
+        : error instanceof Error
+          ? error.message
+          : String(error ?? "");
+    const code =
+      typeof supabaseError?.code === "string" && supabaseError.code.length > 0
+        ? supabaseError.code
+        : (supabaseError as Record<string, unknown> | null)?.error_code as string | undefined;
+    const status =
+      typeof supabaseError?.status === "number"
+        ? supabaseError.status
+        : typeof supabaseError?.statusCode === "number"
+          ? supabaseError.statusCode
+          : undefined;
+    const raw = message.toLowerCase();
     let text: string;
     if (raw.includes("invalid login") || raw.includes("invalid_credentials")) text = auth.invalidCredentials;
     else if (raw.includes("already registered") || raw.includes("user already exists")) {
@@ -48,7 +74,19 @@ export function AuthForm({ mode, locale, nextPath = "/dashboard" }: {
     } else {
       text = isArabic ? "تعذّر إتمام الطلب. تحقق من البيانات وحاول مرة أخرى." : "We could not complete that request. Check your details and try again.";
     }
-    setNotice({ kind: "error", text });
+    // Show the real Supabase diagnostic so we can distinguish CSP / API key / validation failures.
+    // Keep the friendly text above, but always append the technical details for debugging.
+    // eslint-disable-next-line no-console
+    console.error("[auth-form] Supabase error:", { message, code, status, raw: error });
+    const diagnostics = `message: ${message || "—"} | code: ${code ?? "—"} | status: ${status ?? "—"}`;
+    const nameSuffix =
+      typeof supabaseError?.name === "string" && supabaseError.name !== "Error" ? ` | name: ${supabaseError.name}` : "";
+    // Also surface the raw error.message/code/status explicitly as requested:
+    // خطأ: ${error.message} (code: ${error.code}, status: ${error.status})
+    const debugLine = isArabic
+      ? `خطأ: ${message || "—"} (code: ${code ?? "—"}, status: ${status ?? "—"})`
+      : `Error: ${message || "—"} (code: ${code ?? "—"}, status: ${status ?? "—"})`;
+    setNotice({ kind: "error", text: `${text} — ${diagnostics}${nameSuffix} — ${debugLine}` });
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
