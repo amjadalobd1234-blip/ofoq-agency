@@ -189,7 +189,7 @@ export const SEED_SETTINGS: [string, string | number | boolean, SettingType][] =
   ["agency.name_en", "Ofoq", "string"],
   ["agency.default_currency", "USD", "string"],
   ["agency.default_locale", "ar", "string"],
-  ["agency.support_email", "hello@ofaq.com", "string"],
+  ["agency.support_email", "", "string"],
   // The assistant may quote automatically inside these safety rails; anything
   // outside them is escalated to a human with the reason recorded.
   ["assistant.auto_quote", true, "boolean"],

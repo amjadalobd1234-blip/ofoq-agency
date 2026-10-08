@@ -1,22 +1,47 @@
 # أفق | Ofoq
 
-منصة لإدارة وكالة تسويق رقمي. تعمل SQLite محلياً، وتدعم PostgreSQL للإنتاج.
+منصة تسويق رقمي بهوية عراقية، تضم الموقع التعريفي، حسابات العملاء، بوابة المشاريع، محادثة «مساعد أفق»، ولوحة المالك والشريك. الواجهة داكنة بالأسود والذهبي والنحاس، وتدعم العربية RTL والإنجليزية LTR.
 
-## البدء محلياً
+## تشغيل محلي
 
 ```bash
 npm install
 cp .env.example .env
-npm run db:migrate
+# أضف رابط Supabase ومفتاح anon العام إلى .env
 npm run dev
 ```
 
-تحقق من تشغيل الخادم عبر `http://localhost:3000/api/health`. تتوفر صفحة تعريفية على المسار `/`. قاعدة SQLite هي الخيار الافتراضي؛ لا تحتاج إلى Supabase للتطوير المحلي.
+افتح `http://localhost:3000`. إعدادات Supabase المطلوبة للبوابة والمحادثة:
 
-## Supabase وVercel
+```dotenv
+NEXT_PUBLIC_SUPABASE_URL="https://<project-ref>.supabase.co"
+NEXT_PUBLIC_SUPABASE_ANON_KEY="<public-anon-or-publishable-key>"
+```
 
-- دليل النشر العربي: [docs/DEPLOY-AR.md](docs/DEPLOY-AR.md)
-- إعداد Supabase SQL: [docs/setup/supabase-setup.sql](docs/setup/supabase-setup.sql)
-- لتوليد ملفات PostgreSQL بعد تحديث مخطط SQLite: `npm run db:generate-postgres`
+لا تضع `service_role` أو `DATABASE_URL` أو مفاتيح Gemini في كود المتصفح. تصفح الصفحات العامة ممكن دون Supabase، وتعرض صفحات المنصة تنبيه إعداد واضحًا حتى تضاف الإعدادات.
 
-لا تضع `DATABASE_URL` أو أي سر في Git أو في كود المتصفح.
+## إعداد Supabase ونشر Netlify
+
+اقرأ [دليل النشر العربي](docs/DEPLOY-AR.md)، ثم نفّذ `docs/setup/supabase-setup.sql` في Supabase SQL Editor. يستخدم التطبيق Supabase Auth وData API عبر HTTPS مع RLS/RPC؛ لا يحتاج نشر الواجهة الجديدة إلى اتصال PostgreSQL مباشر.
+
+## المسارات الرئيسية
+
+- `/` الموقع التعريفي.
+- `/login` تسجيل الدخول بالبريد أو Google عند تفعيل المزود.
+- `/register` إنشاء حساب والتحقق من البريد.
+- `/dashboard` بوابة العميل.
+- `/chat` محادثة مساعد أفق.
+- `/admin` ملخص تشغيلي للمالك والشريك، محمي بالدور (قراءة فقط في هذه المرحلة).
+- `/api/chat` واجهة المحادثة؛ تحفظ الرسائل في `conversations` و`messages` وتستخدم Gemini عند إعداد المفتاح.
+
+## اختبارات وفحوص
+
+```bash
+npm run typecheck
+npm test
+npm run build
+```
+
+## حالة التكاملات
+
+Gemini اختياري، وGoogle Ads وWhatsApp غير مربوطين افتراضيًا، والدفع الإلكتروني غير مفعّل (الفواتير اليدوية فقط). لا تُعرض بيانات عملاء أو أعمال أو نتائج وهمية. راجع `.env.example` و`docs/DEPLOY-AR.md` لإكمال التهيئة.

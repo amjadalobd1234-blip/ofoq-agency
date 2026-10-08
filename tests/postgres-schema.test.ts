@@ -90,6 +90,20 @@ describe("PostgreSQL schema artifacts", () => {
     expect(parsePostgresInt8("9007199254740992")).toBe("9007199254740992");
   });
 
+  it("bundles Supabase Auth triggers, narrow RLS access and REST RPCs", () => {
+    const setupSql = fs.readFileSync(setupPath, "utf8");
+    const authSql = fs.readFileSync(path.join(rootDir, "db", "migrations", "supabase", "0001_auth_portal.sql"), "utf8");
+    expect(setupSql).toContain(authSql.trim());
+    expect(authSql).toContain("ofoq_auth_user_created");
+    expect(authSql).toContain("ofoq_client_dashboard");
+    expect(authSql).toContain("ofoq_client_chat_send");
+    expect(authSql).toContain("ofoq_admin_dashboard");
+    expect(authSql).toContain("REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM anon, authenticated");
+    expect(authSql).toContain("REVOKE ALL ON FUNCTION public.ofoq_create_auth_profile() FROM PUBLIC, anon, authenticated");
+    expect(authSql).toContain("id = (SELECT auth.uid())::text");
+    expect(authSql).toContain("SECURITY DEFINER");
+  });
+
   it("uses PostgreSQL numeric types and records the matching migration checksums", () => {
     const migrations = listMigrations(postgresDir);
     const setupSql = fs.readFileSync(setupPath, "utf8");

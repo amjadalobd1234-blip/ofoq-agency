@@ -1,59 +1,37 @@
+import { getLocale } from "@/lib/i18n";
+import { LocaleSwitch } from "@/components/locale-switch";
+
 const services = [
   {
-    number: "01",
-    title: "الاستراتيجية والتموضع",
-    description:
-      "نكتشف ما يميّز علامتك ونحوّله إلى اتجاه واضح، ورسالة تصل إلى جمهورك في العراق وخارجه.",
-    tags: ["بحث السوق", "استراتيجية العلامة", "خطة النمو"],
+    number: "01", title: "الاستراتيجية والتموضع", titleEn: "Strategy and positioning",
+    description: "نكتشف ما يميّز علامتك ونحوّله إلى اتجاه واضح، ورسالة تصل إلى جمهورك في العراق وخارجه.",
+    descriptionEn: "We turn what makes your brand different into a clear direction and a message for your audience in Iraq and beyond.",
+    tags: ["بحث السوق", "استراتيجية العلامة", "خطة النمو"], tagsEn: ["Market research", "Brand strategy", "Growth plan"],
   },
   {
-    number: "02",
-    title: "الهوية وأنظمة التصميم",
-    description:
-      "هوية متفرّدة تبدأ من الفكرة، وتمنح علامتك حضوراً متماسكاً في كل نقطة تواصل.",
-    tags: ["هوية بصرية", "أنظمة التصميم", "دليل العلامة"],
+    number: "02", title: "الهوية وأنظمة التصميم", titleEn: "Identity and design systems",
+    description: "هوية متفرّدة تبدأ من الفكرة، وتمنح علامتك حضوراً متماسكاً في كل نقطة تواصل.",
+    descriptionEn: "A distinctive identity built from an idea, giving your brand a coherent presence at every touchpoint.",
+    tags: ["هوية بصرية", "أنظمة التصميم", "دليل العلامة"], tagsEn: ["Visual identity", "Design systems", "Brand guidelines"],
   },
   {
-    number: "03",
-    title: "المواقع والتجارب الرقمية",
-    description:
-      "تجارب رقمية أنيقة وسهلة الاستخدام، مصممة لتعمل بسلاسة على كل شاشة وتدعم أهدافك.",
-    tags: ["تصميم المواقع", "تجربة المستخدم", "التطوير"],
+    number: "03", title: "المواقع والتجارب الرقمية", titleEn: "Websites and digital experiences",
+    description: "تجارب رقمية أنيقة وسهلة الاستخدام، مصممة لتعمل بسلاسة على كل شاشة وتدعم أهدافك.",
+    descriptionEn: "Elegant, accessible digital experiences designed to work across screens and support your goals.",
+    tags: ["تصميم المواقع", "تجربة المستخدم", "التطوير"], tagsEn: ["Web design", "User experience", "Development"],
   },
   {
-    number: "04",
-    title: "المحتوى والتسويق",
-    description:
-      "محتوى وحملات مدروسة تجمع بين صوت علامتك واحتياجات السوق لتصنع نمواً مستداماً.",
-    tags: ["استراتيجية المحتوى", "الحملات", "إدارة القنوات"],
+    number: "04", title: "المحتوى والتسويق", titleEn: "Content and marketing",
+    description: "محتوى وحملات مدروسة تجمع بين صوت علامتك واحتياجات السوق لتصنع نمواً مستداماً.",
+    descriptionEn: "Thoughtful content and campaigns that connect your brand voice with market needs.",
+    tags: ["استراتيجية المحتوى", "الحملات", "إدارة القنوات"], tagsEn: ["Content strategy", "Campaigns", "Channel management"],
   },
 ];
 
 const engagementModels = [
-  {
-    number: "01",
-    name: "مشروع محدد",
-    description: "للهوية أو الموقع أو أي مبادرة لها بداية ووجهة واضحتان.",
-    price: "عرض سعر ثابت",
-    detail: "يُحدّد بعد الاتفاق على نطاق العمل ومراحله.",
-    featured: false,
-  },
-  {
-    number: "02",
-    name: "شراكة نمو",
-    description: "لفريق يحتاج إلى خبرة إبداعية واستراتيجية مستمرة.",
-    price: "اشتراك شهري مرن",
-    detail: "يتناسب مع أولوياتك وحجم العمل المطلوب.",
-    featured: true,
-  },
-  {
-    number: "03",
-    name: "جلسة استشارية",
-    description: "لرؤية ثانية، أو خطة عملية، أو قرار يحتاج إلى وضوح.",
-    price: "حسب نوع الجلسة",
-    detail: "أجندة مركّزة ومخرجات واضحة قبل أن نبدأ.",
-    featured: false,
-  },
+  { number: "01", name: "مشروع محدد", nameEn: "Defined project", description: "للهوية أو الموقع أو أي مبادرة لها بداية ووجهة واضحتان.", descriptionEn: "For a brand, website or initiative with a clear start and finish.", price: "عرض سعر ثابت", priceEn: "Fixed project quote", detail: "يُحدّد بعد الاتفاق على نطاق العمل ومراحله.", detailEn: "Set after agreeing the scope and milestones.", featured: false },
+  { number: "02", name: "شراكة نمو", nameEn: "Growth partnership", description: "لفريق يحتاج إلى خبرة إبداعية واستراتيجية مستمرة.", descriptionEn: "For a team that needs ongoing creative and strategic support.", price: "اشتراك شهري مرن", priceEn: "Flexible monthly retainer", detail: "يتناسب مع أولوياتك وحجم العمل المطلوب.", detailEn: "Shaped around your priorities and scope.", featured: true },
+  { number: "03", name: "جلسة استشارية", nameEn: "Consulting session", description: "لرؤية ثانية، أو خطة عملية، أو قرار يحتاج إلى وضوح.", descriptionEn: "For an outside perspective, a practical plan or a decision that needs clarity.", price: "حسب نوع الجلسة", priceEn: "Scoped to the session", detail: "أجندة مركّزة ومخرجات واضحة قبل أن نبدأ.", detailEn: "A focused agenda and clear outputs agreed in advance.", featured: false },
 ];
 
 function ArrowIcon() {
@@ -75,7 +53,7 @@ function BrandMark() {
   );
 }
 
-function GeometricArtwork() {
+function GeometricArtwork({ locale }: { locale: "ar" | "en" }) {
   return (
     <div className="hero-artwork" aria-hidden="true">
       <svg className="geometry-svg" viewBox="0 0 560 560" fill="none">
@@ -117,73 +95,79 @@ function GeometricArtwork() {
       </div>
       <div className="art-label art-label-top">
         <span className="art-label-index">01</span>
-        <span>جذور عراقية</span>
+        <span>{locale === "ar" ? "جذور عراقية" : "Iraqi roots"}</span>
       </div>
       <div className="art-label art-label-bottom">
         <span className="art-label-dot" />
-        <span>رؤية بلا حدود</span>
+        <span>{locale === "ar" ? "رؤية بلا حدود" : "A wider horizon"}</span>
       </div>
-      <span className="art-coordinate art-coordinate-top">IRAQ · 33°N</span>
+      <span className="art-coordinate art-coordinate-top">IRAQ · MENA</span>
       <span className="art-coordinate art-coordinate-bottom">STRATEGY / DESIGN / GROWTH</span>
     </div>
   );
 }
 
-function SiteBrand({ footer = false }: { footer?: boolean }) {
+function SiteBrand({ footer = false, locale }: { footer?: boolean; locale: "ar" | "en" }) {
   return (
-    <a className={`brand${footer ? " brand-footer" : ""}`} href="#home" aria-label="أُفق — الصفحة الرئيسية">
+    <a className={`brand${footer ? " brand-footer" : ""}`} href="#home" aria-label={locale === "ar" ? "أفق — الصفحة الرئيسية" : "Ofoq — home"}>
       <BrandMark />
       <span className="brand-copy">
         <span className="brand-name">أُفق</span>
-        <span className="brand-caption">CREATIVE STUDIO</span>
+          <span className="brand-caption">{locale === "ar" ? "منصة التسويق الذكي" : "INTELLIGENT MARKETING PLATFORM"}</span>
       </span>
     </a>
   );
 }
 
-export default function HomePage() {
+export default async function HomePage() {
+  const locale = await getLocale();
+  const ar = locale === "ar";
   return (
     <main className="site-shell" id="home">
       <header className="site-header container">
-        <SiteBrand />
-        <nav className="main-nav" aria-label="التنقل الرئيسي">
-          <a href="#about">عن أفق</a>
-          <a href="#services">الخدمات</a>
-          <a href="#pricing">الأسعار</a>
-          <a href="#contact">تواصل</a>
+        <SiteBrand locale={locale} />
+        <nav className="main-nav" aria-label={ar ? "التنقل الرئيسي" : "Main navigation"}>
+          <a href="/about">{ar ? "عن أفق" : "About"}</a>
+          <a href="/services">{ar ? "الخدمات" : "Services"}</a>
+          <a href="#pricing">{ar ? "الأسعار" : "Pricing"}</a>
+          <a href="/contact">{ar ? "تواصل" : "Contact"}</a>
         </nav>
-        <a className="header-cta" href="#contact">
-          <span>لنبدأ حواراً</span>
-          <ArrowIcon />
-        </a>
+        <div className="header-actions">
+          <LocaleSwitch locale={locale} />
+          <a className="header-login" href="/login">{ar ? "تسجيل دخول" : "Sign in"}</a>
+          <a className="header-cta" href="/register" aria-label={ar ? "لنبدأ حواراً — إنشاء حساب" : "Start a conversation — create an account"}>
+            <span>{ar ? "لنبدأ حواراً" : "Start a conversation"}</span>
+            <ArrowIcon />
+          </a>
+        </div>
       </header>
 
       <section className="hero container" aria-labelledby="hero-title">
         <div className="hero-copy">
-          <p className="eyebrow hero-eyebrow"><span className="eyebrow-rule" /> وكالة إبداعية من العراق، للعالم</p>
+          <p className="eyebrow hero-eyebrow"><span className="eyebrow-rule" /> {ar ? "منصة تسويق رقمي من العراق، للعالم" : "A digital marketing platform from Iraq, for the world"}</p>
           <h1 id="hero-title">
             أُفق<span className="title-period">.</span>
-            <span className="hero-title-sub">نحو رؤيةٍ أبعد.</span>
+            <span className="hero-title-sub">{ar ? "نحو رؤيةٍ أبعد." : "A wider horizon."}</span>
           </h1>
           <p className="hero-description">
-            نبني للعلامات الطموحة حضوراً يليق بأفكارها؛ باستراتيجية واعية، وتصميم متقن، وتجارب رقمية تبقى.
+            {ar ? "نبني للعلامات الطموحة حضوراً يليق بأفكارها؛ باستراتيجية واعية، وتصميم متقن، وتجارب رقمية تبقى." : "We help ambitious brands build a presence that matches their ideas — with thoughtful strategy, considered design and lasting digital experiences."}
           </p>
           <div className="hero-actions">
-            <a className="button button-gold" href="#contact">
-              <span>ابدأ مشروعك</span>
+            <a className="button button-gold" href="/register">
+              <span>{ar ? "ابدأ مشروعك" : "Start your project"}</span>
               <ArrowIcon />
             </a>
-            <a className="button-text" href="#services">
-              اكتشف خدماتنا <span aria-hidden="true">←</span>
+            <a className="button-text" href="/services">
+              {ar ? "اكتشف خدماتنا" : "Explore our services"} <span aria-hidden="true">←</span>
             </a>
           </div>
           <div className="hero-footnote">
             <span className="footnote-line" />
-            <p>من بغداد، إلى كل مكان يستحق أن يراك.</p>
+            <p>{ar ? "من العراق، إلى كل مكان يستحق أن يراك." : "From Iraq, to every place ready to see you."}</p>
           </div>
         </div>
 
-        <GeometricArtwork />
+        <GeometricArtwork locale={locale} />
 
         <div className="hero-side-note" aria-hidden="true">
           <span>OFOQ — 2026</span>
@@ -196,20 +180,20 @@ export default function HomePage() {
         <div className="section-index" aria-hidden="true">
           <span>01</span>
           <span className="index-rule" />
-          <span>من نحن</span>
+          <span>{ar ? "من نحن" : "ABOUT"}</span>
         </div>
         <div className="about-heading">
-          <p className="eyebrow">عن أُفق</p>
-          <h2 id="about-title">جذورٌ عراقية.<br /><span>رؤيةٌ عالمية.</span></h2>
+          <p className="eyebrow">{ar ? "عن أفق" : "ABOUT OFOQ"}</p>
+          <h2 id="about-title">{ar ? <>جذورٌ عراقية.<br /><span>رؤيةٌ عالمية.</span></> : <>Iraqi roots.<br /><span>A global outlook.</span></>}</h2>
         </div>
         <div className="about-copy">
-          <p className="about-lead">نؤمن أن لكل فكرة أفقاً أوسع مما تراه الآن.</p>
+          <p className="about-lead">{ar ? "نؤمن أن لكل فكرة أفقاً أوسع مما تراه الآن." : "We believe every idea has a wider horizon than it can see today."}</p>
           <p>
-            أُفق استوديو إبداعي واستراتيجي يعمل مع العلامات التي تريد أن تنمو بثقة. نمزج فهماً عميقاً للسياق المحلي بمعايير عمل عالمية، لنحوّل الطموح إلى قصة واضحة وتجربة متكاملة وأثر ملموس.
+            {ar ? "أفق منصة تسويق رقمي تعمل مع العلامات التي تريد أن تنمو بثقة. نمزج فهماً عميقاً للسياق المحلي بمعايير عمل عالمية، لنحوّل الطموح إلى خطة واضحة وتجربة متكاملة وأثر ملموس." : "Ofoq is a digital marketing platform for brands ready to grow with confidence. We bring local context together with global standards to turn ambition into a clear plan, a coherent experience and meaningful impact."}
           </p>
           <div className="about-signature">
             <span className="signature-mark" aria-hidden="true">✳</span>
-            <span><small>بوصلتنا</small><strong>وضوحٌ في الفكرة. أثرٌ في كل خطوة.</strong></span>
+            <span><small>{ar ? "بوصلتنا" : "OUR COMPASS"}</small><strong>{ar ? "وضوحٌ في الفكرة. أثرٌ في كل خطوة." : "Clarity in every idea. Impact in every step."}</strong></span>
           </div>
         </div>
       </section>
@@ -218,11 +202,11 @@ export default function HomePage() {
         <div className="container">
           <div className="section-heading section-heading-split">
             <div>
-              <p className="eyebrow">02 <span className="eyebrow-divider">/</span> ما نقدّمه</p>
-              <h2 id="services-title">من الرؤية <span>إلى الأثر.</span></h2>
+              <p className="eyebrow">02 <span className="eyebrow-divider">/</span> {ar ? "ما نقدّمه" : "WHAT WE DO"}</p>
+              <h2 id="services-title">{ar ? <>من الرؤية <span>إلى الأثر.</span></> : <>From vision <span>to impact.</span></>}</h2>
             </div>
             <p className="section-intro">
-              خدمات مترابطة، تُصمَّم حول احتياجك وتعمل معاً لتصنع للعلامة حضوراً لا يُنسى.
+              {ar ? "خدمات مترابطة، تُصمَّم حول احتياجك وتعمل معاً لتصنع للعلامة حضوراً لا يُنسى." : "Connected services shaped around your needs, working together to build a memorable brand presence."}
             </p>
           </div>
           <div className="service-grid">
@@ -232,13 +216,13 @@ export default function HomePage() {
                   <span className="service-number">{service.number}</span>
                   <span className="service-ornament" aria-hidden="true"><span /><span /><span /></span>
                 </div>
-                <h3>{service.title}</h3>
-                <p>{service.description}</p>
-                <ul className="service-tags" aria-label={`مجالات ${service.title}`}>
-                  {service.tags.map((tag) => <li key={tag}>{tag}</li>)}
+                <h3>{ar ? service.title : service.titleEn}</h3>
+                <p>{ar ? service.description : service.descriptionEn}</p>
+                <ul className="service-tags" aria-label={ar ? `مجالات ${service.title}` : `${service.titleEn} areas`}>
+                  {(ar ? service.tags : service.tagsEn).map((tag) => <li key={tag}>{tag}</li>)}
                 </ul>
-                <a className="service-link" href="#contact" aria-label={`ناقش ${service.title} مع أفق`}>
-                  <span>ناقش احتياجك</span><ArrowIcon />
+                <a className="service-link" href="/register" aria-label={ar ? `ناقش ${service.title} مع أفق` : `Discuss ${service.titleEn} with Ofoq`}>
+                  <span>{ar ? "ناقش احتياجك" : "Discuss your needs"}</span><ArrowIcon />
                 </a>
               </article>
             ))}
@@ -248,28 +232,28 @@ export default function HomePage() {
 
       <section className="pricing-section container" id="pricing" aria-labelledby="pricing-title">
         <div className="pricing-heading">
-          <p className="eyebrow">03 <span className="eyebrow-divider">/</span> الأسعار</p>
-          <h2 id="pricing-title">شراكة واضحة.<br /><span>وقيمة تستحقها.</span></h2>
+          <p className="eyebrow">03 <span className="eyebrow-divider">/</span> {ar ? "الأسعار" : "PRICING"}</p>
+          <h2 id="pricing-title">{ar ? <>شراكة واضحة.<br /><span>وقيمة تستحقها.</span></> : <>A clear partnership.<br /><span>Value you can see.</span></>}</h2>
           <p>
-            لا أسعار مخفية ولا باقات مفروضة. نحدّد نطاق العمل معك أولاً، ثم نقدّم عرضاً واضحاً قبل أي التزام.
+            {ar ? "لا أسعار مخفية ولا باقات مفروضة. نحدّد نطاق العمل معك أولاً، ثم نقدّم عرضاً واضحاً قبل أي التزام." : "No hidden prices or forced bundles. We agree on the scope first, then share a clear proposal before you commit."}
           </p>
-          <div className="pricing-promise"><span aria-hidden="true">✳</span> وضوح من أول محادثة، حتى آخر تسليم.</div>
+          <div className="pricing-promise"><span aria-hidden="true">✳</span> {ar ? "وضوح من أول محادثة، حتى آخر تسليم." : "Clarity from the first conversation to delivery."}</div>
         </div>
         <div className="pricing-options">
           {engagementModels.map((model) => (
             <article className={`pricing-card${model.featured ? " pricing-card-featured" : ""}`} key={model.number}>
               <div className="pricing-card-top">
                 <span className="pricing-number">{model.number}</span>
-                {model.featured && <span className="recommended-label">الأكثر مرونة</span>}
+                {model.featured && <span className="recommended-label">{ar ? "الأكثر مرونة" : "MOST FLEXIBLE"}</span>}
               </div>
-              <h3>{model.name}</h3>
-              <p className="pricing-description">{model.description}</p>
+              <h3>{ar ? model.name : model.nameEn}</h3>
+              <p className="pricing-description">{ar ? model.description : model.descriptionEn}</p>
               <div className="price-divider" />
-              <span className="price-label">آلية التسعير</span>
-              <strong className="price-value">{model.price}</strong>
-              <p className="price-detail">{model.detail}</p>
-              <a className="pricing-link" href="#contact">
-                <span>اطلب عرضاً مناسباً</span><ArrowIcon />
+              <span className="price-label">{ar ? "آلية التسعير" : "PRICING MODEL"}</span>
+              <strong className="price-value">{ar ? model.price : model.priceEn}</strong>
+              <p className="price-detail">{ar ? model.detail : model.detailEn}</p>
+              <a className="pricing-link" href="/register">
+                <span>{ar ? "اطلب عرضاً مناسباً" : "Request a proposal"}</span><ArrowIcon />
               </a>
             </article>
           ))}
@@ -292,29 +276,29 @@ export default function HomePage() {
             </svg>
           </div>
           <div className="contact-copy">
-            <p className="eyebrow">04 <span className="eyebrow-divider">/</span> الخطوة التالية</p>
-            <h2 id="contact-title">لِنرسم أفقك<br /><span>القادم معاً.</span></h2>
-            <p>حدثنا عن فكرتك. نبدأ بحوار صريح، ونعود إليك بخطوة واضحة تناسب طموحك.</p>
+            <p className="eyebrow">04 <span className="eyebrow-divider">/</span> {ar ? "الخطوة التالية" : "NEXT STEP"}</p>
+            <h2 id="contact-title">{ar ? <>لِنرسم أفقك<br /><span>القادم معاً.</span></> : <>Let’s shape your<br /><span>next horizon.</span></>}</h2>
+            <p>{ar ? "حدثنا عن فكرتك. ابدأ بحوار صريح، وسنساعدك على توضيح الخطوة التالية." : "Tell us about your idea. Start an honest conversation and we can help clarify the next step."}</p>
           </div>
           <div className="contact-action">
-            <a className="button button-gold contact-button" href="mailto:hello@ofaq.com">
-              <span>راسل فريق أُفق</span><ArrowIcon />
+            <a className="button button-gold contact-button" href="/register">
+              <span>{ar ? "ابدأ محادثة" : "Start a conversation"}</span><ArrowIcon />
             </a>
-            <a className="contact-email" href="mailto:hello@ofaq.com">hello@ofaq.com</a>
-            <span className="contact-reach">العراق <span>·</span> الشرق الأوسط <span>·</span> العالم</span>
+            <span className="contact-email">{ar ? "لا يوجد بريد دعم مهيأ بعد" : "No support email is configured yet"}</span>
+            <span className="contact-reach">{ar ? <>العراق <span>·</span> الشرق الأوسط <span>·</span> العالم</> : <>Iraq <span>·</span> Middle East <span>·</span> Worldwide</>}</span>
           </div>
         </div>
       </section>
 
       <footer className="site-footer container">
-        <SiteBrand footer />
-        <div className="footer-links" aria-label="روابط سريعة">
-          <a href="#about">عن أفق</a>
-          <a href="#services">الخدمات</a>
-          <a href="#pricing">الأسعار</a>
-          <a href="#contact">تواصل</a>
+        <SiteBrand footer locale={locale} />
+        <div className="footer-links" aria-label={ar ? "روابط سريعة" : "Quick links"}>
+          <a href="/about">{ar ? "عن أفق" : "About"}</a>
+          <a href="/services">{ar ? "الخدمات" : "Services"}</a>
+          <a href="#pricing">{ar ? "الأسعار" : "Pricing"}</a>
+          <a href="/contact">{ar ? "تواصل" : "Contact"}</a>
         </div>
-        <p className="footer-copyright">© {new Date().getFullYear()} أُفق. صُنِع بفكرٍ عراقي.</p>
+        <p className="footer-copyright">© {new Date().getFullYear()} {ar ? "أفق. صُنِع بفكرٍ عراقي." : "Ofoq. Built with an Iraqi perspective."}</p>
       </footer>
     </main>
   );

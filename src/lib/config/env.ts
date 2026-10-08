@@ -84,6 +84,12 @@ export interface AppEnv {
     enabled: boolean;
   };
 
+  gemini: {
+    apiKey: string;
+    model: string;
+    enabled: boolean;
+  };
+
   email: {
     provider: EmailProvider;
     from: string;
@@ -161,7 +167,7 @@ export function getEnv(): AppEnv {
     nodeEnv: str("NODE_ENV", "development"),
     isProduction: isProduction(),
     appUrl,
-    appDomain: str("APP_DOMAIN", "ofaq.com"),
+    appDomain: str("APP_DOMAIN"),
     appNameAr: str("APP_NAME_AR", "أفق"),
     appNameEn: str("APP_NAME_EN", "Ofoq"),
     defaultLocale: str("APP_DEFAULT_LOCALE", "ar") === "en" ? "en" : "ar",
@@ -201,9 +207,15 @@ export function getEnv(): AppEnv {
       enabled: aiProvider === "openai_compatible" && Boolean(aiApiKey),
     },
 
+    gemini: {
+      apiKey: str("GEMINI_API_KEY"),
+      model: str("GEMINI_MODEL", "gemini-2.0-flash"),
+      enabled: Boolean(str("GEMINI_API_KEY")),
+    },
+
     email: {
       provider: emailProvider,
-      from: str("EMAIL_FROM", "no-reply@ofaq.com"),
+      from: str("EMAIL_FROM"),
       fromName: str("EMAIL_FROM_NAME", "أفق | Ofoq"),
       smtp: {
         host: smtpHost,

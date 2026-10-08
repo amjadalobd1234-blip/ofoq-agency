@@ -68,7 +68,7 @@ export function renderPostgresMigrations(rootDir = process.cwd()): GeneratedMigr
 }
 
 /** Build the standalone, re-runnable schema script for Supabase SQL Editor. */
-export function renderSupabaseSetupSql(migrations: GeneratedMigration[]): string {
+export function renderSupabaseSetupSql(migrations: GeneratedMigration[], rootDir = process.cwd()): string {
   const setupStatements: string[] = [
     [
       "-- Ofoq / Supabase PostgreSQL setup",
@@ -76,6 +76,7 @@ export function renderSupabaseSetupSql(migrations: GeneratedMigration[]): string
       "-- Regenerate with: npm run db:generate-postgres",
       "-- Creates 35 application tables plus the _migrations tracking table (36 total).",
       "-- Safe to re-run: existing tables and indexes are left unchanged.",
+      "-- The bundle also installs Supabase Auth triggers, RLS-safe REST RPCs, and column grants.",
       "-- Run this as the Supabase database owner (normally `postgres`).",
     ].join("\n"),
     "CREATE SCHEMA IF NOT EXISTS public;",
@@ -90,6 +91,20 @@ export function renderSupabaseSetupSql(migrations: GeneratedMigration[]): string
       }
       setupStatements.push(makeIdempotentForSetup(statement));
     }
+  }
+
+  // Supabase-specific Auth triggers, REST/RLS policies, and safe RPCs are kept
+  // separate from the portable SQLite source migrations. Include them in the
+  // manual SQL Editor bundle without ever opening a database connection here.
+  const portalSqlPath = path.join(rootDir, "db", "migrations", "supabase", "0001_auth_portal.sql");
+  if (fs.existsSync(portalSqlPath)) {
+    setupStatements.push(
+      [
+        "-- Supabase Auth, client portal, chat RPCs and RLS/column privileges.",
+        "-- Source: db/migrations/supabase/0001_auth_portal.sql.",
+        fs.readFileSync(portalSqlPath, "utf8").trim(),
+      ].join("\n"),
+    );
   }
 
   const appliedRows = migrations
@@ -124,7 +139,7 @@ export function generatePostgresMigrations(rootDir = process.cwd()): GeneratedMi
   for (const migration of migrations) {
     fs.writeFileSync(path.join(outputDir, migration.filename), migration.sql, "utf8");
   }
-  fs.writeFileSync(setupPath, renderSupabaseSetupSql(migrations), "utf8");
+  fs.writeFileSync(setupPath, renderSupabaseSetupSql(migrations, rootDir), "utf8");
 
   return migrations;
 }

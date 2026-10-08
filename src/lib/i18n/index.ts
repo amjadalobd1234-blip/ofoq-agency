@@ -1,4 +1,4 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 
 import type { Locale } from "@/lib/domain/types";
 import { LOCALES, type Dictionary, dictionaries, isLocale } from "./dictionaries";
@@ -28,7 +28,8 @@ export async function getLocale(): Promise<Locale> {
   const store = await cookies();
   const fromCookie = store.get(LOCALE_COOKIE)?.value;
   if (isLocale(fromCookie)) return fromCookie;
-  return "ar";
+  const requestHeaders = await headers();
+  return pickLocaleFromHeader(requestHeaders.get("accept-language") ?? undefined);
 }
 
 export function dir(locale: Locale): "rtl" | "ltr" {
