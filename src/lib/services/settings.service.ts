@@ -112,7 +112,7 @@ export async function getAgencySettings(): Promise<AgencySettings> {
     nameEn: await getSettingValue(SETTING_KEYS.nameEn, "Ofoq"),
     defaultCurrency: isSupportedCurrency(currency) ? currency : DEFAULT_CURRENCY,
     defaultLocale: locale === "en" ? "en" : "ar",
-    supportEmail: await getSettingValue(SETTING_KEYS.supportEmail, "hello@ofaq.com"),
+    supportEmail: await getSettingValue(SETTING_KEYS.supportEmail, ""),
 
     taxPercent: await getSettingValue(SETTING_KEYS.taxPercent, 0),
     invoiceDueDays: await getSettingValue(SETTING_KEYS.invoiceDueDays, 7),

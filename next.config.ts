@@ -10,6 +10,15 @@ import type { NextConfig } from "next";
  *   domain has been purchased or connected.
  */
 const isDev = process.env.NODE_ENV !== "production";
+const supabaseConnectOrigin = (() => {
+  try {
+    const url = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "");
+    const localHttp = isDev && (url.hostname === "localhost" || url.hostname === "127.0.0.1");
+    return url.protocol === "https:" || localHttp ? url.origin : "";
+  } catch {
+    return "";
+  }
+})();
 
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -26,7 +35,7 @@ const securityHeaders = [
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       "font-src 'self' data: https://fonts.gstatic.com",
       "img-src 'self' data: blob: https:",
-      "connect-src 'self'",
+      `connect-src 'self'${supabaseConnectOrigin ? ` ${supabaseConnectOrigin}` : ""}`,
       "frame-ancestors 'self'",
       "base-uri 'self'",
       "form-action 'self'",
