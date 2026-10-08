@@ -21,24 +21,24 @@
   "dependencies": {
     "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.117.3",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
     "better-sqlite3": "^13.0.3",
     "jose": "^5.9.6",
     "next": "^15.5.0",
     "pg": "^8.23.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "typescript": "^5.7.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@netlify/plugin-nextjs": "^5.16.2",
     "@tailwindcss/postcss": "^4.1.0",
     "@types/better-sqlite3": "^7.6.11",
-    "@types/node": "^22.10.0",
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
     "tailwindcss": "^4.1.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.0",
     "vitest": "^2.1.8"
   },
   "engines": {
