@@ -33,11 +33,21 @@ export function AdminDashboard({ locale }: { locale: Locale }) {
     const controller = new AbortController();
     fetch("/api/admin/dashboard", { cache: "no-store", signal: controller.signal })
       .then(async (response) => {
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || "Unable to load admin data.");
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          // eslint-disable-next-line no-console
+          console.error("[AdminDashboard] /api/admin/dashboard failed:", {
+            status: response.status,
+            statusText: response.statusText,
+            payload,
+          });
+          throw new Error(payload.error || "Unable to load admin data.");
+        }
         setData(payload.data as AdminData);
       })
       .catch((reason: unknown) => {
+        // eslint-disable-next-line no-console
+        console.error("[AdminDashboard] failed to load admin data:", reason);
         if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Unable to load admin data.");
       })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });

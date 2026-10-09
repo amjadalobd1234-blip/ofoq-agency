@@ -13,8 +13,8 @@ export async function createSupabaseServerClient() {
 
   const cookieStore = await cookies();
   return createServerClient(config.url, config.anonKey, {
-    // Same pinned session-cookie name the browser client writes (see browser.ts).
-    cookieOptions: { name: getSupabaseAuthStorageKey(config) },
+    // Same pinned session-cookie name (and path) the browser client writes (see browser.ts).
+    cookieOptions: { name: getSupabaseAuthStorageKey(config), path: "/" },
     cookies: {
       getAll() {
         return cookieStore.getAll();

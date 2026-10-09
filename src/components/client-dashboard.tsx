@@ -46,12 +46,24 @@ export function ClientDashboard({ locale }: { locale: Locale }) {
     const controller = new AbortController();
     fetch("/api/dashboard", { cache: "no-store", signal: controller.signal })
       .then(async (response) => {
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || "Unable to load account data.");
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          // Full error surfaced in the console for debugging (status + body
+          // from the server, which already excludes SQL/schema details).
+          // eslint-disable-next-line no-console
+          console.error("[ClientDashboard] /api/dashboard failed:", {
+            status: response.status,
+            statusText: response.statusText,
+            payload,
+          });
+          throw new Error(payload.error || "Unable to load account data.");
+        }
         setData(payload.data as PortalData);
       })
       .catch((reason: unknown) => {
         if (controller.signal.aborted) return;
+        // eslint-disable-next-line no-console
+        console.error("[ClientDashboard] failed to load dashboard data:", reason);
         setError(reason instanceof Error ? reason.message : "Unable to load account data.");
       })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
