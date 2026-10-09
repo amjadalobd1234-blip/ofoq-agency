@@ -167,6 +167,36 @@ export default function DebugPage() {
           return { status: r.ok ? 'ok' : 'warn', detail: `status ${r.status} — body: ${body.slice(0, 260)}` }
         },
       },
+      {
+        name: 'proxy: /api/supabase-proxy/auth/v1/health (تجاوز حجب ISP)',
+        run: async () => {
+          const r = await fetch('/api/supabase-proxy/auth/v1/health', {
+            method: 'GET',
+            headers: { apikey: key },
+            signal: AbortSignal.timeout(12000),
+          })
+          const body = (await r.text()).slice(0, 140)
+          return {
+            status: r.ok ? 'ok' : 'warn',
+            detail: `status ${r.status} — ${r.ok ? 'الوسيط يعمل ✓ (المتصفح يصل لـ Supabase عبر Netlify)' : 'الوسيط لم ينجح'} — body: ${body}`,
+          }
+        },
+      },
+      {
+        name: 'proxy: /api/supabase-proxy/auth/v1/settings (مع apikey)',
+        run: async () => {
+          const r = await fetch('/api/supabase-proxy/auth/v1/settings', {
+            method: 'GET',
+            headers: { apikey: key },
+            signal: AbortSignal.timeout(12000),
+          })
+          const body = (await r.text()).slice(0, 160)
+          return {
+            status: r.ok ? 'ok' : 'warn',
+            detail: `status ${r.status} — body: ${body}`,
+          }
+        },
+      },
     ]
 
     const out: TestResult[] = tests.map((t) => ({ name: t.name, status: 'pending', detail: 'جارٍ التنفيذ…', ms: null }))
@@ -198,6 +228,10 @@ export default function DebugPage() {
     const lines: string[] = []
     const general = [byName.get('example.com'), byName.get('google.com')]
     const supa = [byName.get('supabase health'), byName.get('supabase root')]
+    const proxyOk = [
+      byName.get('proxy: /api/supabase-proxy/auth/v1/health (تجاوز حجب ISP)'),
+      byName.get('proxy: /api/supabase-proxy/auth/v1/settings (مع apikey)'),
+    ].some((r) => r?.status === 'ok')
     const generalOk = general.every((r) => r?.status === 'ok')
     const supaOk = supa.some((r) => r?.status === 'ok')
     const server = serverProbeLocal as { verdict?: string } | null
@@ -206,14 +240,19 @@ export default function DebugPage() {
       lines.push('⚠️ حتى example.com/google.com تفشل: المشكلة ليست في Supabase — تحقق من الإنترنت نفسه (بروكسي، VPN، مانع إعلانات، جدار حماية، DNS).')
     }
     if (generalOk && !supaOk) {
-      lines.push('🔴 المؤكد: الإنترنت يعمل لكن رابط مشروع Supabase لا يرد من متصفحك. هذا يطابق خطأ "Failed to fetch" تمامًا.')
-      lines.push('→ السبب الأول على الأغلب: مشروع Supabase متوقف (Paused) أو محذوف أو الرابط (ref) غير صحيح. افتح dashboard.supabase.com وتحقق من حالة المشروع.')
+      if (proxyOk) {
+        lines.push('🔴➡️🟢 المؤكد: حجب من مزود الخدمة (ISP) لنطاق supabase.co — المتصفح لا يصل للمشروع مباشرة، لكن مواقع أخرى تعمل.')
+        lines.push('🟢 الوسيط /api/supabase-proxy يعمل — التسجيل والدخول سيعملان من هذه الشبكة بدون VPN (يتطلب ضبط NEXT_PUBLIC_SUPABASE_PROXY_URL=/api/supabase-proxy ثم إعادة النشر).')
+      } else {
+        lines.push('🔴 المؤكد: رابط مشروع Supabase لا يرد من متصفحك (حجب ISP — كما في العراق — أو مشروع متوقف/رابط خاطئ).')
+        lines.push('→ 1) تحقق من حالة المشروع في dashboard.supabase.com (Paused؟) — 2) فعّل الوسيط NEXT_PUBLIC_SUPABASE_PROXY_URL=/api/supabase-proxy وأعد النشر لتجاوز الحجب.')
+      }
     }
     if (server?.verdict === 'server_cannot_reach_supabase') {
-      lines.push('🔴 خادم Netlify أيضًا لا يصل إلى Supabase → المشكلة من جهة المشروع/الرابط نفسه وليست متصفحك. أعد تفعيل المشروع أو صحّح الرابط.')
+      lines.push('🔴 خادم Netlify أيضًا لا يصل إلى Supabase → المشروع متوقف/محذوف/الرابط خاطئ (قبل أي حجب). أعد تفعيل المشروع أو صحّح الرابط.')
     }
     if (server?.verdict === 'server_reaches_supabase' && !supaOk) {
-      lines.push('🟠 خادم Netlify يصل إلى Supabase لكن متصفحك لا يصل → حظر محلي: مانع إعلانات (uBlock/AdBlock)، مضاد فيروسات، VPN/بروكسي، أو DNS ملوّث. جرّب نافذة Incognito بلا إضافات.')
+      lines.push('🟠 خادم Netlify يصل إلى Supabase لكن متصفحك لا يصل مباشرة ← هذا نمط حجب ISP لنطاق supabase.co (شائع في العراق). الحل: الوسيط — أو جرّب شبكة أخرى للتأكد.')
     }
     if (generalOk && supaOk) {
       lines.push('🟢 كل اختبارات الشبكة ناجحة — الاتصال بـ Supabase يعمل من متصفحك الآن. إن فشل التسجيل فالسبب إعدادات Auth (Site URL / Redirect URLs / تأكيد البريد) وليست الشبكة.')
@@ -256,6 +295,18 @@ export default function DebugPage() {
       keyLooksLikePublishable: rawKey ? rawKey.startsWith('sb_publishable_') : false,
       nodeEnv: process.env.NODE_ENV,
       origin: typeof window !== 'undefined' ? window.location.origin : '',
+      proxyUrl: process.env.NEXT_PUBLIC_SUPABASE_PROXY_URL || 'غير مضبوط (اتصال مباشر)',
+      browserBaseUrl: (() => {
+        const raw = process.env.NEXT_PUBLIC_SUPABASE_PROXY_URL?.trim().replace(/\/+$/, '')
+        if (raw && typeof window !== 'undefined') {
+          try {
+            return `${new URL(raw, window.location.origin).toString().replace(/\/+$/, '')} (عبر الوسيط)`
+          } catch {
+            /* fall through */
+          }
+        }
+        return url || 'MISSING'
+      })(),
       online: typeof navigator !== 'undefined' ? navigator.onLine : null,
       userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
     })
