@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getSupabaseBrowserBaseUrl, getSupabaseConfig } from "@/lib/supabase/config";
+import { getSupabaseAuthStorageKey, getSupabaseBrowserBaseUrl, getSupabaseConfig } from "@/lib/supabase/config";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -79,5 +79,26 @@ describe("Supabase proxy configuration", () => {
     expect(config?.proxyUrl).toBe("/api/supabase-proxy");
     // In the Node test environment there is no window: server-side must stay direct.
     expect(getSupabaseBrowserBaseUrl(config!)).toBe("https://ofoq-project.supabase.co");
+  });
+});
+
+describe("Supabase session cookie name", () => {
+  it("is derived from the project URL, matching the supabase-js server-side default", () => {
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://ofoq-project.supabase.co");
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "public-anon-key");
+    const config = getSupabaseConfig();
+    // supabase-js derives `sb-<first hostname label>-auth-token` from the URL it
+    // is given; the middleware and route handlers always use the project URL.
+    expect(getSupabaseAuthStorageKey(config!)).toBe("sb-ofoq-project-auth-token");
+  });
+
+  it("stays pinned to the project URL even when the proxy is configured", () => {
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://ofoq-project.supabase.co");
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "public-anon-key");
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_PROXY_URL", "/api/supabase-proxy");
+    const config = getSupabaseConfig();
+    // The browser talks to the proxy host, but the cookie name must still match
+    // what the middleware reads — otherwise logins bounce back to /login.
+    expect(getSupabaseAuthStorageKey(config!)).toBe("sb-ofoq-project-auth-token");
   });
 });

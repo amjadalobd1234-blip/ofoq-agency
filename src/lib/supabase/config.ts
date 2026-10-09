@@ -55,6 +55,23 @@ export function isSupabaseConfigured(): boolean {
 }
 
 /**
+ * Name of the cookie that carries the Supabase session.
+ *
+ * supabase-js derives this by default as `sb-<first hostname label>-auth-token`
+ * from the URL each client is created with. The browser client may be pointed
+ * at the same-origin proxy (see getSupabaseBrowserBaseUrl), whose hostname
+ * differs from the project's — so unless the name is pinned explicitly, the
+ * browser stores the session under a different cookie than the middleware and
+ * route handlers read (they always use `config.url`). Freshly signed-in users
+ * would then be bounced from every private page back to /login. Both sides
+ * must agree on this value.
+ */
+export function getSupabaseAuthStorageKey(config: SupabasePublicConfig): string {
+  const projectRef = new URL(config.url).hostname.split(".")[0];
+  return `sb-${projectRef}-auth-token`;
+}
+
+/**
  * Base URL the **browser** client must use.
  *
  * - Proxy configured → resolve it against the page origin (a relative

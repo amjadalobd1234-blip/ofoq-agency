@@ -2,7 +2,7 @@
 
 import { createBrowserClient } from "@supabase/ssr";
 
-import { getSupabaseBrowserBaseUrl, getSupabaseConfig } from "./config";
+import { getSupabaseAuthStorageKey, getSupabaseBrowserBaseUrl, getSupabaseConfig } from "./config";
 
 let browserClient: ReturnType<typeof createBrowserClient> | null = null;
 
@@ -17,6 +17,13 @@ let browserClient: ReturnType<typeof createBrowserClient> | null = null;
 export function createSupabaseBrowserClient() {
   const config = getSupabaseConfig();
   if (!config) return null;
-  browserClient ??= createBrowserClient(getSupabaseBrowserBaseUrl(config), config.anonKey);
+  browserClient ??= createBrowserClient(getSupabaseBrowserBaseUrl(config), config.anonKey, {
+    // Pin the session cookie name to the key derived from the real project URL.
+    // With the proxy enabled the base URL hostname differs from the project's,
+    // and supabase-js would otherwise derive a different default storage key —
+    // the middleware would then never see the session cookie and logins would
+    // silently bounce back to /login.
+    cookieOptions: { name: getSupabaseAuthStorageKey(config) },
+  });
   return browserClient;
 }
