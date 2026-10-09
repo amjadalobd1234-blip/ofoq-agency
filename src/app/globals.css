@@ -2211,3 +2211,21 @@ button:disabled {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ── Owner admin entry points & identity header (admin control room) ─────── */
+.dashboard-shortcuts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-bottom: 12px; }
+.owner-admin-link { display: inline-flex; align-items: center; gap: 8px; min-height: 34px; border: 1px solid rgba(212, 175, 55, 0.4); border-radius: 3px; background: rgba(212, 175, 55, 0.07); padding: 6px 12px; color: var(--gold-light); font: inherit; font-size: 11px; cursor: pointer; text-decoration: none; }
+.owner-admin-link:hover { border-color: var(--gold); background: rgba(212, 175, 55, 0.14); }
+.owner-admin-link span { color: var(--gold); }
+.header-identity { display: inline-flex; align-items: center; gap: 7px; max-width: 220px; color: #d9d4c9; font-size: 11px; }
+.header-identity strong { overflow: hidden; color: #ece7de; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.role-chip { border: 1px solid rgba(212, 175, 55, 0.35); border-radius: 999px; background: rgba(212, 175, 55, 0.08); padding: 2px 8px; color: var(--gold-light); font-size: 9px; white-space: nowrap; }
+.portal-button { display: inline-flex; align-items: center; min-height: 33px; border: 1px solid rgba(212, 175, 55, 0.4); border-radius: 3px; padding: 0 9px; color: var(--gold-light); font-size: 10px; text-decoration: none; white-space: nowrap; }
+.portal-button:hover { border-color: var(--gold); background: rgba(212, 175, 55, 0.1); }
+.stat-value-text { max-width: 100%; overflow: hidden; font-size: 17px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.admin-quick-links { margin: 0; }
+@media (max-width: 720px) {
+  .header-identity { max-width: 120px; }
+  .header-identity .role-chip { display: none; }
+  .portal-button { padding-inline: 7px; font-size: 9px; }
+}

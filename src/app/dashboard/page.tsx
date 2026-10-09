@@ -1,4 +1,5 @@
 import { ClientDashboard } from "@/components/client-dashboard";
+import { OwnerAdminLink } from "@/components/owner-admin-link";
 import { PlatformFrame } from "@/components/platform-frame";
 import { getLocale } from "@/lib/i18n";
 
@@ -9,6 +10,9 @@ export default async function DashboardPage() {
   const ar = locale === "ar";
   return (
     <PlatformFrame locale={locale} active="dashboard" title={ar ? "بوابة العميل" : "Client portal"} description={ar ? "مشاريعك وطلباتك وفواتيرك في مكان واحد." : "Your projects, requests and invoices in one place."}>
+      <div className="dashboard-shortcuts">
+        <OwnerAdminLink locale={locale} />
+      </div>
       <ClientDashboard locale={locale} />
     </PlatformFrame>
   );
