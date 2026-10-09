@@ -62,7 +62,15 @@ export function AuthForm({ mode, locale, nextPath = "/dashboard" }: {
           : undefined;
     const raw = message.toLowerCase();
     let text: string;
-    if (raw.includes("invalid login") || raw.includes("invalid_credentials")) text = auth.invalidCredentials;
+    const isNetworkFailure =
+      supabaseError?.name === "TypeError" ||
+      supabaseError?.name === "NetworkError" ||
+      /failed to fetch|networkerror|fetch failed|load failed|network request failed/.test(raw);
+    if (isNetworkFailure) {
+      text = isArabic
+        ? "فشل الاتصال بخادم Supabase قبل وصول الطلب (Failed to fetch) — هذه ليست مشكلة بيانات. المتصفح لا يستطيع الوصول إلى رابط المشروع. الأسباب الشائعة: مشروع Supabase متوقف (Paused) في لوحة Supabase، أو الرابط غير صحيح، أو حظر من مانع إعلانات/مضاد فيروسات/شبكة. افتح صفحة /debug لمعرفة السبب بالضبط."
+        : "The connection to Supabase failed before the request was sent (Failed to fetch) — this is not a data problem. The browser cannot reach the project URL. Common causes: the Supabase project is Paused in the dashboard, the URL is wrong, or an ad-blocker/antivirus/network is blocking it. Open /debug to pinpoint the cause.";
+    } else if (raw.includes("invalid login") || raw.includes("invalid_credentials")) text = auth.invalidCredentials;
     else if (raw.includes("already registered") || raw.includes("user already exists")) {
       text = isArabic ? "تعذر إنشاء الحساب. إذا كان لديك حساب مسبقًا، سجّل الدخول أو استعد كلمة المرور." : "We could not create that account. If you already have one, sign in or reset your password.";
     } else if (raw.includes("email not confirmed")) {
