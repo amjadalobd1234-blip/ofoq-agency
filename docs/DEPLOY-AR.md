@@ -58,6 +58,7 @@ WHERE lower(email) = lower('owner@example.com');
 | --- | --- |
 | `NEXT_PUBLIC_SUPABASE_URL` | رابط مشروع Supabase من Project Settings → API |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | المفتاح العام `anon`/publishable فقط؛ تمنع RLS الوصول غير المصرح |
+| `NEXT_PUBLIC_SUPABASE_PROXY_URL` | اختياري — اضبطها على `/api/supabase-proxy` في الشبكات التي يحجب فيها مزود الخدمة نطاق `*.supabase.co` (العراق وغيرها)؛ المتصفح يمر حينها عبر وسيط Netlify |
 | `APP_URL` | رابط نشر الموقع الفعلي، مثل `https://اسم-الموقع.netlify.app` |
 | `APP_DOMAIN` | اختياري؛ اتركه فارغًا حتى اختيار نطاق تملكه وربطه فعليًا |
 | `GEMINI_API_KEY` | اختياري؛ مفتاح Gemini على الخادم لتوليد ردود `/api/chat` |
@@ -66,6 +67,39 @@ WHERE lower(email) = lower('owner@example.com');
 انسخ `.env.example` إلى `.env` للتطوير المحلي. عند غياب Gemini يعمل مساعد أفق بردود قواعد محلية واضحة ولا يدّعي وجود مزود AI فعّال. لا تضع `GEMINI_API_KEY` ضمن متغيرات `NEXT_PUBLIC_*`.
 
 **لا تضف** `SUPABASE_SERVICE_ROLE_KEY` أو `DATABASE_URL` إلى واجهات المتصفح. لا يحتاج العميل إلى بيانات بطاقة؛ الدفع الإلكتروني غير مفعّل حاليًا، والفواتير اليدوية فقط ظاهرة كحالة غير مفعّلة.
+
+## 3-ب. وضع الوسيط — تجاوز حجب `*.supabase.co` (العراق ودول أخرى)
+
+يستخدم بعض مزودي الإنترنت حجبًا على مستوى الشبكة لنطاق `supabase.co` بالكامل (بينما يبقى نطاق لوحة التحكم `supabase.com` متاحًا). النتيجة: `Failed to fetch` في التسجيل والدخول من تلك الشبكات حتى مع تطبيق سليم وإعدادات صحيحة.
+
+الحل المدمج: **وسيط عبر Netlify** في `src/app/api/supabase-proxy/[...path]/route.ts`.
+المتصفح يرسل طلبات Supabase إلى نفس نطاق الموقع (`/api/supabase-proxy/auth/v1/...`)، وسيرفرات Netlify (خارج نطاق الحجب) تمرر الطلب إلى مشروع Supabase وتعيد الرد.
+
+**التفعيل:**
+
+1. أضف المتغير في Netlify (Site configuration → Environment variables):
+   ```text
+   NEXT_PUBLIC_SUPABASE_PROXY_URL=/api/supabase-proxy
+   ```
+2. أعد النشر (قيم `NEXT_PUBLIC_*` تُدمج وقت البناء).
+3. افتح `/debug` — يجب أن يظهر: اختبارات supabase المباشرة ممكن أن تفشل على شبكتك، بينما اختبارات `proxy:` كلها خضراء 🟢.
+
+هذا الإعداد **اختياري**: في بيئات لا يوجد فيها حجب، اتركه فارغًا فيتحدث المتصفح مع Supabase مباشرة. الخادم (middleware ومسارات API) يتصل مع Supabase دائمًا بشكل مباشر ولا يتأثر بالوسيط.
+
+**القيود المهمة:**
+
+- **تأكيد البريد (Confirm email):** رابط التحقق الافتراضي يشير إلى `*.supabase.co` مباشرة وهو محجوب في تلك الشبكات. الخيارات:
+  - أبسط حل: عطّل **Confirm email** من Authentication → Providers → Email، فيُنشأ الجلسة فور التسجيل عبر الوسيط. (مناسب للبوابات الداخلية.)
+  - أو استخدم قالب بريد يمرر الرابط عبر الوسيط — من Authentication → Email Templates ضع:
+    ```html
+    <a href="https://اسم-موقعك.netlify.app/api/supabase-proxy/auth/v1/verify?token={{ .Token }}&amp;type={{ .Type }}&amp;redirect_to={{ .RedirectTo }}">
+      تأكيد الحساب
+    </a>
+    ```
+  - أو فعّل Supabase Custom Domains (مدفوع) ليصبح نطاق Auth خاصًا بك وغير محجوب.
+- **تسجيل Google:** مسار OAuth يمر بنقّال متصفح إلى `supabase.co` في منتصف الرحلة (Google → callback على المشروع) ولا يعمل عبر وسيط HTTP. البريد وكلمة المرور يعملان كاملَيْن عبر الوسيط. Google يتطلب إما شبكة غير محجوبة أو نطاق Auth مخصص.
+- **Realtime (WebSocket):** لا يمر عبر الوسيط. هذا المشروع لا يستخدم Realtime حاليًا.
+- **الملفات الكبيرة (Storage):** رفع الملفات الكبيرة عبر الوسيط محدود بحدود دوال Netlify؛ الرفع الصغير يعمل.
 
 ## 4. النشر على Netlify
 

@@ -62,7 +62,15 @@ export function AuthForm({ mode, locale, nextPath = "/dashboard" }: {
           : undefined;
     const raw = message.toLowerCase();
     let text: string;
-    if (raw.includes("invalid login") || raw.includes("invalid_credentials")) text = auth.invalidCredentials;
+    const isNetworkFailure =
+      supabaseError?.name === "TypeError" ||
+      supabaseError?.name === "NetworkError" ||
+      /failed to fetch|networkerror|fetch failed|load failed|network request failed/.test(raw);
+    if (isNetworkFailure) {
+      text = isArabic
+        ? "فشل الاتصال بخادم Supabase قبل وصول الطلب (Failed to fetch) — هذه ليست مشكلة بيانات. السبب الأشهر: مزود الإنترنت يحجب نطاق supabase.co (كما في العراق). الحل: تفعيل الوسيط NEXT_PUBLIC_SUPABASE_PROXY_URL=/api/supabase-proxy في Netlify وإعادة النشر — أو مشروع Supabase متوقف (Paused) في اللوحة. افتح صفحة /debug للتأكد (اختبارات proxy: هي الفيصل)."
+        : "The connection to Supabase failed before the request was sent (Failed to fetch) — this is not a data problem. The most common cause: your ISP blocks the supabase.co domain (as in Iraq). Fix: enable the NEXT_PUBLIC_SUPABASE_PROXY_URL=/api/supabase-proxy proxy in Netlify and redeploy — or the Supabase project is Paused in the dashboard. Open /debug to confirm (the proxy: tests are decisive).";
+    } else if (raw.includes("invalid login") || raw.includes("invalid_credentials")) text = auth.invalidCredentials;
     else if (raw.includes("already registered") || raw.includes("user already exists")) {
       text = isArabic ? "تعذر إنشاء الحساب. إذا كان لديك حساب مسبقًا، سجّل الدخول أو استعد كلمة المرور." : "We could not create that account. If you already have one, sign in or reset your password.";
     } else if (raw.includes("email not confirmed")) {
