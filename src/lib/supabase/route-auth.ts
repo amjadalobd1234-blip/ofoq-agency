@@ -1,5 +1,7 @@
 import type { User } from "@supabase/supabase-js";
+import { cookies } from "next/headers";
 
+import { getSupabaseAuthStorageKey, getSupabaseConfig } from "./config";
 import { createSupabaseServerClient } from "./server";
 
 type ServerClient = NonNullable<Awaited<ReturnType<typeof createSupabaseServerClient>>>;
@@ -20,16 +22,24 @@ export async function requireSupabaseUser(): Promise<
 
   const { data, error } = await client.auth.getUser();
   if (error || !data.user) {
-    // Logged server-side only. If `error` is set, the Supabase Auth API itself
-    // rejected the request (e.g. expired/invalid refresh token). If `error`
-    // is null but there's still no user, the request simply had no session
-    // cookie at all — check src/middleware.ts and the cookie name/path in
-    // src/lib/supabase/{browser,server}.ts before suspecting RLS.
+    // Logged server-side only (Netlify Function Logs). Cookie VALUES are never
+    // logged — only names/counts — so tokens don't leak into logs.
+    // - cookieCount 0 → browser isn't sending cookies at all.
+    // - auth cookies present but no user → cookie name/format mismatch or invalid token.
+    const cookieStore = await cookies();
+    const all = cookieStore.getAll();
+    const config = getSupabaseConfig();
+    const expectedName = config ? getSupabaseAuthStorageKey(config) : null;
     // eslint-disable-next-line no-console
-    console.error("[requireSupabaseUser] no session:", {
-      message: error?.message ?? "no session cookie found on the request",
-      code: error?.code,
-      status: error?.status,
+    console.error("[route-auth]", {
+      hasCookies: all.length,
+      cookieNames: all.map((c) => c.name),
+      expectedAuthCookie: expectedName,
+      hasExpectedAuthCookie: expectedName ? all.some((c) => c.name === expectedName || c.name.startsWith(`${expectedName}.`)) : false,
+      authCookieSizes: all.filter((c) => c.name.startsWith("sb-")).map((c) => ({ name: c.name, length: c.value.length, base64Prefixed: c.value.startsWith("base64-") })),
+      authError: error?.message,
+      authErrorCode: error?.code,
+      authErrorStatus: error?.status,
     });
     return {
       response: Response.json({ error: "Authentication required." }, { status: 401, headers: { "Cache-Control": "no-store" } }),
