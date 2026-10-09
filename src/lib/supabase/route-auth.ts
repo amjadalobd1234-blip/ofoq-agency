@@ -20,6 +20,17 @@ export async function requireSupabaseUser(): Promise<
 
   const { data, error } = await client.auth.getUser();
   if (error || !data.user) {
+    // Logged server-side only. If `error` is set, the Supabase Auth API itself
+    // rejected the request (e.g. expired/invalid refresh token). If `error`
+    // is null but there's still no user, the request simply had no session
+    // cookie at all — check src/middleware.ts and the cookie name/path in
+    // src/lib/supabase/{browser,server}.ts before suspecting RLS.
+    // eslint-disable-next-line no-console
+    console.error("[requireSupabaseUser] no session:", {
+      message: error?.message ?? "no session cookie found on the request",
+      code: error?.code,
+      status: error?.status,
+    });
     return {
       response: Response.json({ error: "Authentication required." }, { status: 401, headers: { "Cache-Control": "no-store" } }),
     };
