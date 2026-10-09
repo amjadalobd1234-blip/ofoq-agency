@@ -1,19 +1,20 @@
 import type { ReactNode } from "react";
 
 import type { Locale } from "@/lib/domain/types";
-import { PlatformHeader } from "@/components/platform-header";
+import { PlatformHeader, type HeaderIdentity } from "@/components/platform-header";
 
-export function PlatformFrame({ locale, active, title, description, staff = false, children }: {
+export function PlatformFrame({ locale, active, title, description, staff = false, identity, children }: {
   locale: Locale;
   active: "dashboard" | "chat" | "admin";
   title: string;
   description?: string;
   staff?: boolean;
+  identity?: HeaderIdentity;
   children: ReactNode;
 }) {
   return (
     <main className="platform-shell">
-      <PlatformHeader locale={locale} staff={staff} active={active} />
+      <PlatformHeader locale={locale} staff={staff} active={active} identity={identity} />
       <div className="platform-main">
         <div className="platform-page-heading">
           <span className="eyebrow">{locale === "ar" ? "منصة أفق" : "OFOQ PLATFORM"}</span>
