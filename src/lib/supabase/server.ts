@@ -1,7 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
-import { getSupabaseConfig } from "./config";
+import { getSupabaseAuthStorageKey, getSupabaseConfig } from "./config";
 
 /**
  * Request-scoped Supabase client. Supabase Auth and data access both use HTTPS;
@@ -13,6 +13,8 @@ export async function createSupabaseServerClient() {
 
   const cookieStore = await cookies();
   return createServerClient(config.url, config.anonKey, {
+    // Same pinned session-cookie name the browser client writes (see browser.ts).
+    cookieOptions: { name: getSupabaseAuthStorageKey(config) },
     cookies: {
       getAll() {
         return cookieStore.getAll();

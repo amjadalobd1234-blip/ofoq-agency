@@ -1,7 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-import { getSupabaseConfig } from "@/lib/supabase/config";
+import { getSupabaseAuthStorageKey, getSupabaseConfig } from "@/lib/supabase/config";
 
 const PRIVATE_ROUTES = ["/dashboard", "/chat", "/admin"];
 const AUTH_ROUTES = ["/login", "/register", "/forgot-password"];
@@ -31,6 +31,10 @@ export async function middleware(request: NextRequest) {
 
   let response = NextResponse.next({ request });
   const supabase = createServerClient(config.url, config.anonKey, {
+    // Same pinned session-cookie name the browser client writes (see lib/supabase/browser.ts).
+    // Without this, the proxy base URL makes the browser store the session under
+    // a different cookie name and every private page redirects back to /login.
+    cookieOptions: { name: getSupabaseAuthStorageKey(config) },
     cookies: {
       getAll: () => request.cookies.getAll(),
       setAll(cookiesToSet) {
