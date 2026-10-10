@@ -84,8 +84,8 @@ describe("Ofoq assistant provider chain", () => {
     expect(result.ai).toBe(false);
     expect(result.text).toContain("السعر");
     // Every declared model of the two configured providers is attempted
-    // (Groq: 2, Gemini: 3) before the rules engine takes over.
-    expect(fetchMock).toHaveBeenCalledTimes(5);
+    // (Groq: 3, Gemini: 3) before the rules engine takes over.
+    expect(fetchMock).toHaveBeenCalledTimes(6);
   });
 
   it("keeps the guardrails and trims the conversation context", () => {

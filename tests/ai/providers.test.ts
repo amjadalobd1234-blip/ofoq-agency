@@ -46,7 +46,11 @@ describe("AI provider registry", () => {
     const byId = Object.fromEntries(AI_PROVIDERS.map((provider) => [provider.id, provider]));
 
     expect(byId.groq?.baseUrl).toBe("https://api.groq.com/openai/v1");
-    expect(byId.groq?.models).toEqual(["openai/gpt-oss-120b", "openai/gpt-oss-20b"]);
+    expect(byId.groq?.models).toEqual([
+      "openai/gpt-oss-120b",
+      "openai/gpt-oss-20b",
+      "qwen/qwen3.8-27b",
+    ]);
     expect(byId.groq?.dailyLimit).toBe(1_000);
     expect(byId.groq?.limitUnit).toBe("day");
 
@@ -56,8 +60,9 @@ describe("AI provider registry", () => {
 
     expect(byId.nvidia?.baseUrl).toBe("https://integrate.api.nvidia.com/v1");
     expect(byId.nvidia?.models).toEqual([
-      "nvidia/nemotron-3-super-120b-a12b",
+      "google/gemma-4-31b-it",
       "nvidia/nemotron-3.5-lightning-30b-a3b",
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
     ]);
     expect(byId.nvidia?.dailyLimit).toBe(40);
     expect(byId.nvidia?.limitUnit).toBe("minute");
@@ -74,6 +79,7 @@ describe("AI provider registry", () => {
     expect(byId.openrouter?.models).toEqual([
       "google/gemma-4-31b-it:free",
       "google/gemma-4-26b-a4b-it:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
     ]);
     expect(byId.openrouter?.dailyLimit).toBe(50);
   });
@@ -117,7 +123,7 @@ describe("AI provider registry", () => {
     expect(providerLabel("unknown", "ar")).toBe("unknown");
   });
 
-  it("gives every provider a same-provider fallback model, so one retired ID cannot kill it", () => {
+  it("lists only free models, with same-provider fallbacks and role hints that exist", () => {
     for (const provider of AI_PROVIDERS) {
       const models = [...provider.models];
       // models[0] is the default, the remaining entries are the fallbacks, and
@@ -125,15 +131,53 @@ describe("AI provider registry", () => {
       expect(models.length).toBeGreaterThanOrEqual(2);
       expect(new Set(models).size).toBe(models.length);
       expect(models.every((model) => model.trim().length > 0)).toBe(true);
+      // Every role hint must point at a model this provider actually declares,
+      // otherwise the "prefer" step would silently do nothing.
+      for (const [kind, model] of Object.entries(provider.modelRoles ?? {})) {
+        expect(["arabic", "fast", "accurate"]).toContain(kind);
+        expect(models).toContain(model);
+      }
     }
 
-    // No retired 2025-era ID may sneak back in.
+    // The three providers that broke the connection test declare three free
+    // models each: one to call, two to fall back to.
+    const byId = Object.fromEntries(AI_PROVIDERS.map((provider) => [provider.id, provider]));
+    for (const id of ["groq", "nvidia", "openrouter"] as const) {
+      expect(byId[id]?.models).toHaveLength(3);
+    }
+  });
+
+  it("never pins a retired or paid model ID again", () => {
     const everyModel = AI_PROVIDERS.flatMap((provider) => [...provider.models]).join(" ");
+
+    // Groq: retired chat models (mixtral/gemma2 in 2025, both Llama chat models
+    // on 2026-08-16) — the Llama pair is Enterprise-only now.
     expect(everyModel).not.toMatch(/llama-3\.3-70b-versatile/);
     expect(everyModel).not.toMatch(/llama-3\.1-8b-instant/);
+    expect(everyModel).not.toMatch(/mixtral-8x7b-32768/);
+    expect(everyModel).not.toMatch(/gemma2-9b-it/);
+    // NVIDIA: end-of-life, missing or paid-only endpoints.
     expect(everyModel).not.toMatch(/meta\/llama-3\.3-70b-instruct/);
+    expect(everyModel).not.toMatch(/meta\/llama-3\.1-8b-instruct/);
+    expect(everyModel).not.toMatch(/mistralai\/mistral-7b-instruct-v0\.3/);
+    expect(everyModel).not.toMatch(/nvidia\/llama-3\.1-nemotron-70b-instruct/);
+    // OpenRouter: :free slugs with no serving provider left, and paid slugs.
     expect(everyModel).not.toMatch(/meta-llama\/llama-3\.3-70b-instruct:free/);
+    expect(everyModel).not.toMatch(/meta-llama\/llama-3\.2-3b-instruct:free/);
+    expect(everyModel).not.toMatch(/gemma-2-9b-it:free/);
+    expect(everyModel).not.toMatch(/qwen\/qwen-2\.5-7b-instruct:free/);
     expect(everyModel).not.toMatch(/qwen-2\.5-72b-instruct/);
+    // A paid endpoint would be exactly the bug that broke the connection test:
+    // these IDs exist, but their build page prices them per 1M tokens, so a free
+    // key cannot call them. (`:free` slugs on OpenRouter are the free ones.)
+    const everyId = AI_PROVIDERS.flatMap((provider) => [...provider.models]);
+    for (const paid of [
+      "nvidia/nemotron-3-super-120b-a12b",
+      "moonshotai/kimi-k3",
+      "meta-llama/llama-3.3-70b-instruct",
+    ]) {
+      expect(everyId).not.toContain(paid);
+    }
   });
 
   it("never hardcodes a key in the AI or email source files", () => {

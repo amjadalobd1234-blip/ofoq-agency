@@ -3,7 +3,9 @@
  *
  * One entry point — `chat()` — that:
  *   1. picks providers by priority (Groq first),
- *   2. prefers Cohere automatically when the conversation is Arabic,
+ *   2. prefers Cohere automatically when the conversation is Arabic, and asks
+ *      each provider for its Arabic / fastest / most accurate free model when
+ *      the request hints at one (`options.prefer`, or Arabic script detected),
  *   3. inside a provider, falls back to the next declared model before giving up
  *      on that provider — so a retired model ID (404 "model does not exist",
  *      end-of-life, a withdrawn `:free` slug) costs one attempt, not a provider,
@@ -25,6 +27,7 @@ import {
   getAiProvider,
   providerApiKey,
   providersByPriority,
+  type AiModelPreference,
   type AiProviderConfig,
   type AiProviderId,
 } from "@/lib/ai/providers";
@@ -60,6 +63,13 @@ export interface AiChatOptions {
   providerId?: AiProviderId | string;
   /** Overrides the model for the provider that is attempted. */
   model?: string;
+  /**
+   * Which provider model to try first: the Arabic-friendly one, the fastest one
+   * or the most accurate one. Defaults to "arabic" automatically when any
+   * message contains Arabic script. The provider's remaining models stay in the
+   * fallback chain either way.
+   */
+  prefer?: AiModelPreference;
   /** Ask for a JSON object response where the provider supports it. */
   json?: boolean;
   /** Usage sink. Defaults to a structured log line. */
@@ -160,21 +170,37 @@ function sanitiseModel(candidate: string | undefined): string | null {
 /**
  * Models to try for one provider, in order.
  *
- * An explicit `options.model` goes first (caller wins), then the provider's
- * declared list — `models[0]` is the default and the rest are its fallbacks.
+ *   1. an explicit `options.model` — the caller wins;
+ *   2. the provider's model for `options.prefer` (arabic / fast / accurate);
+ *   3. the declared list — `models[0]` is the default, the rest are fallbacks.
+ *
  * Duplicates are dropped, and a provider with no declared model still yields one
  * empty entry so the SDK produces a clear vendor error instead of a crash.
  */
 export function providerModels(
   provider: AiProviderConfig,
-  options: Pick<AiChatOptions, "model"> = {},
+  options: Pick<AiChatOptions, "model" | "prefer"> = {},
 ): string[] {
   const requested = sanitiseModel(options.model);
+  const preferred = options.prefer ? sanitiseModel(provider.modelRoles?.[options.prefer]) : null;
   const declared = (Array.isArray(provider.models) ? provider.models : []).filter(
     (model) => typeof model === "string" && model.trim().length > 0,
   );
-  const ordered = requested ? [requested, ...declared.filter((model) => model !== requested)] : declared;
+
+  const ordered: string[] = [];
+  for (const model of [requested, preferred, ...declared]) {
+    if (model && !ordered.includes(model)) ordered.push(model);
+  }
   return ordered.length > 0 ? ordered : [""];
+}
+
+/** The preference a request implies: an explicit hint, else Arabic detection. */
+export function requestPreference(
+  messages: AiMessage[],
+  options: Pick<AiChatOptions, "prefer"> = {},
+): AiModelPreference | undefined {
+  if (options.prefer) return options.prefer;
+  return messagesContainArabic(messages) ? "arabic" : undefined;
 }
 
 function normaliseMessages(messages: AiMessage[]): AiMessage[] {
@@ -306,6 +332,7 @@ async function callProvider(
 export async function chat(messages: AiMessage[], options: AiChatOptions = {}): Promise<AiChatResult> {
   const normalised = normaliseMessages(messages);
   const order = providerOrder(normalised, options);
+  const prefer = requestPreference(normalised, options);
   const timeoutMs = clampTimeout(options.timeoutMs);
   const onUsage = options.onUsage;
   const attempts: AiAttempt[] = [];
@@ -318,9 +345,9 @@ export async function chat(messages: AiMessage[], options: AiChatOptions = {}): 
     if (cancelled) break;
 
     const apiKey = providerApiKey(provider);
-    // `models[0]` first, then that provider's fallbacks (a retired model ID must
-    // not cost the whole provider).
-    const models = providerModels(provider, options);
+    // The model this request prefers first, then that provider's fallbacks (a
+    // retired model ID must not cost the whole provider).
+    const models = providerModels(provider, { model: options.model, prefer });
 
     if (!apiKey) {
       const attempt: AiAttempt = {
