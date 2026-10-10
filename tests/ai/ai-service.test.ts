@@ -5,8 +5,10 @@ import {
   chat,
   isArabicText,
   messagesContainArabic,
+  providerModels,
   providerOrder,
 } from "../../src/lib/ai/ai-service";
+import { getAiProvider } from "../../src/lib/ai/providers";
 import type { AiUsageEntry } from "../../src/lib/ai/usage";
 import {
   callBody,
@@ -32,13 +34,13 @@ describe("AI service fallback chain", () => {
     vi.stubEnv("GROQ_API_KEY", "unit-test-key");
     const fetchMock = vi
       .fn()
-      .mockResolvedValue(completionResponse("Groq answered.", { model: "llama-3.3-70b-versatile" }));
+      .mockResolvedValue(completionResponse("Groq answered.", { model: "openai/gpt-oss-120b" }));
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await chat(ENGLISH);
 
     expect(result.provider).toBe("groq");
-    expect(result.model).toBe("llama-3.3-70b-versatile");
+    expect(result.model).toBe("openai/gpt-oss-120b");
     expect(result.text).toBe("Groq answered.");
     expect(result.usage).toEqual({
       inputTokens: 11,
@@ -49,7 +51,7 @@ describe("AI service fallback chain", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(callUrl(fetchMock, 0)).toContain("https://api.groq.com/openai/v1/chat/completions");
     expect(callHeaders(fetchMock, 0).authorization).toBe("Bearer unit-test-key");
-    expect(callBody(fetchMock, 0).model).toBe("llama-3.3-70b-versatile");
+    expect(callBody(fetchMock, 0).model).toBe("openai/gpt-oss-120b");
     expect(result.attempts.map((attempt) => attempt.status)).toEqual(["OK"]);
   });
 
@@ -60,6 +62,7 @@ describe("AI service fallback chain", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(errorResponse(429, "rate limit exceeded"))
+      .mockResolvedValueOnce(errorResponse(429, "rate limit exceeded"))
       .mockResolvedValueOnce(completionResponse("Gemini answered.", { model: "gemini-2.5-flash" }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -67,10 +70,13 @@ describe("AI service fallback chain", () => {
 
     expect(result.provider).toBe("gemini");
     expect(result.text).toBe("Gemini answered.");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // Groq's whole model list is rate limited before the chain moves on.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(callUrl(fetchMock, 0)).toContain("api.groq.com");
-    expect(callUrl(fetchMock, 1)).toContain("generativelanguage.googleapis.com/v1beta/openai");
+    expect(callUrl(fetchMock, 1)).toContain("api.groq.com");
+    expect(callUrl(fetchMock, 2)).toContain("generativelanguage.googleapis.com/v1beta/openai");
     expect(result.attempts.map((attempt) => [attempt.provider, attempt.status])).toEqual([
+      ["groq", "RATE_LIMIT"],
       ["groq", "RATE_LIMIT"],
       ["gemini", "OK"],
     ]);
@@ -83,16 +89,97 @@ describe("AI service fallback chain", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(errorResponse(503, "upstream unavailable"))
+      .mockResolvedValueOnce(errorResponse(503, "upstream unavailable"))
       .mockResolvedValueOnce(
-        completionResponse("NVIDIA answered.", { model: "meta/llama-3.3-70b-instruct" }),
+        completionResponse("NVIDIA answered.", { model: "nvidia/nemotron-3-super-120b-a12b" }),
       );
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await chat(ENGLISH);
 
     expect(result.provider).toBe("nvidia");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    // Groq (two models) then NVIDIA (its default model).
+    expect(callUrl(fetchMock, 1)).toContain("api.groq.com");
+    expect(callUrl(fetchMock, 2)).toContain("integrate.api.nvidia.com/v1");
+    expect(result.attempts.map((attempt) => [attempt.provider, attempt.status])).toEqual([
+      ["groq", "PROVIDER_ERROR"],
+      ["groq", "PROVIDER_ERROR"],
+      // Gemini has no key in this test: recorded, but never called.
+      ["gemini", "MISSING_KEY"],
+      ["nvidia", "OK"],
+    ]);
+  });
+
+  it("falls back to the provider's next model when the default one is retired (404)", async () => {
+    clearProviderKeys();
+    vi.stubEnv("GROQ_API_KEY", "unit-test-key");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        errorResponse(404, "The model `openai/gpt-oss-120b` does not exist or you do not have access to it."),
+      )
+      .mockResolvedValueOnce(completionResponse("Groq fallback answered.", { model: "openai/gpt-oss-20b" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await chat(ENGLISH);
+
+    // Still Groq: one retired ID must not cost the whole provider.
+    expect(result.provider).toBe("groq");
+    expect(result.model).toBe("openai/gpt-oss-20b");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(callUrl(fetchMock, 0)).toContain("api.groq.com");
+    expect(callUrl(fetchMock, 1)).toContain("api.groq.com");
+    expect(callBody(fetchMock, 0).model).toBe("openai/gpt-oss-120b");
+    expect(callBody(fetchMock, 1).model).toBe("openai/gpt-oss-20b");
+    expect(result.attempts.map((attempt) => [attempt.provider, attempt.model, attempt.status])).toEqual([
+      ["groq", "openai/gpt-oss-120b", "PROVIDER_ERROR"],
+      ["groq", "openai/gpt-oss-20b", "OK"],
+    ]);
+  });
+
+  it("does not waste attempts on the same provider when its key is rejected (401)", async () => {
+    clearProviderKeys();
+    vi.stubEnv("GROQ_API_KEY", "unit-test-key");
+    vi.stubEnv("NVIDIA_API_KEY", "unit-test-key");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(errorResponse(401, "invalid api key"))
+      .mockResolvedValueOnce(
+        completionResponse("NVIDIA answered.", { model: "nvidia/nemotron-3.5-lightning-30b-a3b" }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await chat(ENGLISH);
+
+    // Groq's other models share the same rejected key: go straight to NVIDIA.
+    expect(result.provider).toBe("nvidia");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(callUrl(fetchMock, 1)).toContain("integrate.api.nvidia.com/v1");
-    expect(result.attempts[0]).toMatchObject({ provider: "groq", status: "PROVIDER_ERROR" });
+    expect(result.attempts.map((attempt) => [attempt.provider, attempt.status])).toEqual([
+      ["groq", "PROVIDER_ERROR"],
+      ["gemini", "MISSING_KEY"],
+      ["nvidia", "OK"],
+    ]);
+  });
+
+  it("orders the models of a provider, with an explicit caller model first", () => {
+    const groq = getAiProvider("groq");
+    expect(groq).not.toBeNull();
+    expect(providerModels(groq!)).toEqual(["openai/gpt-oss-120b", "openai/gpt-oss-20b"]);
+    expect(providerModels(groq!, { model: "openai/gpt-oss-20b" })).toEqual([
+      "openai/gpt-oss-20b",
+      "openai/gpt-oss-120b",
+    ]);
+    // A caller model the provider does not declare is tried first, then the list.
+    expect(providerModels(groq!, { model: "openai/gpt-oss-120b-preview" })).toEqual([
+      "openai/gpt-oss-120b-preview",
+      "openai/gpt-oss-120b",
+      "openai/gpt-oss-20b",
+    ]);
+    // Unsafe or blank overrides are ignored.
+    expect(providerModels(groq!, { model: "  " })).toEqual(["openai/gpt-oss-120b", "openai/gpt-oss-20b"]);
+    expect(providerModels(groq!, { model: "bad model!" })).toEqual(["openai/gpt-oss-120b", "openai/gpt-oss-20b"]);
   });
 
   it("skips providers whose key is missing without spending a request", async () => {
@@ -201,6 +288,7 @@ describe("AI service fallback chain", () => {
       provider: "none",
       status: "UNAVAILABLE",
     });
-    expect(failing).toHaveBeenCalledTimes(2);
+    // Groq (2 models) + Gemini (3 models): one attempt per declared model.
+    expect(failing).toHaveBeenCalledTimes(5);
   });
 });

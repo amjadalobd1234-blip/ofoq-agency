@@ -4,10 +4,13 @@
  * One entry point — `chat()` — that:
  *   1. picks providers by priority (Groq first),
  *   2. prefers Cohere automatically when the conversation is Arabic,
- *   3. falls back to the next provider on rate limits (429), timeouts (>30s),
+ *   3. inside a provider, falls back to the next declared model before giving up
+ *      on that provider — so a retired model ID (404 "model does not exist",
+ *      end-of-life, a withdrawn `:free` slug) costs one attempt, not a provider,
+ *   4. falls back to the next provider on rate limits (429), timeouts (>30s),
  *      5xx/4xx errors, network failures and missing keys,
- *   4. records one usage row per attempt through the caller's sink,
- *   5. returns `{ text, provider, model, usage }` — and only throws when every
+ *   5. records one usage row per attempt through the caller's sink,
+ *   6. returns `{ text, provider, model, usage }` — and only throws when every
  *      provider failed, so callers can fall back to the local rules engine.
  *
  * All five providers (Groq, Gemini over its OpenAI-compatibility endpoint,
@@ -148,10 +151,30 @@ function clampTimeout(value: number | undefined): number {
 }
 
 /** Keeps a caller-supplied model safe to put in a request body. */
-function resolveModel(provider: AiProviderConfig, options: AiChatOptions): string {
-  const candidate = options.model?.trim();
-  if (candidate && /^[A-Za-z0-9._:/@-]{1,120}$/.test(candidate)) return candidate;
-  return provider.models[0] ?? "";
+function sanitiseModel(candidate: string | undefined): string | null {
+  const value = candidate?.trim();
+  if (value && /^[A-Za-z0-9._:/@-]{1,120}$/.test(value)) return value;
+  return null;
+}
+
+/**
+ * Models to try for one provider, in order.
+ *
+ * An explicit `options.model` goes first (caller wins), then the provider's
+ * declared list — `models[0]` is the default and the rest are its fallbacks.
+ * Duplicates are dropped, and a provider with no declared model still yields one
+ * empty entry so the SDK produces a clear vendor error instead of a crash.
+ */
+export function providerModels(
+  provider: AiProviderConfig,
+  options: Pick<AiChatOptions, "model"> = {},
+): string[] {
+  const requested = sanitiseModel(options.model);
+  const declared = (Array.isArray(provider.models) ? provider.models : []).filter(
+    (model) => typeof model === "string" && model.trim().length > 0,
+  );
+  const ordered = requested ? [requested, ...declared.filter((model) => model !== requested)] : declared;
+  return ordered.length > 0 ? ordered : [""];
 }
 
 function normaliseMessages(messages: AiMessage[]): AiMessage[] {
@@ -181,7 +204,13 @@ function toApiMessages(messages: AiMessage[]): OpenAI.Chat.Completions.ChatCompl
   });
 }
 
-function describeError(error: unknown): { status: AiUsageStatus; error: string; aborted: boolean } {
+function describeError(error: unknown): {
+  status: AiUsageStatus;
+  error: string;
+  aborted: boolean;
+  /** HTTP status when the failure came back from the provider, else undefined. */
+  httpStatus?: number;
+} {
   const message = error instanceof Error ? error.message : String(error);
 
   if (error instanceof OpenAI.APIUserAbortError) {
@@ -191,7 +220,7 @@ function describeError(error: unknown): { status: AiUsageStatus; error: string; 
     return { status: "TIMEOUT", error: message, aborted: false };
   }
   if (error instanceof OpenAI.RateLimitError) {
-    return { status: "RATE_LIMIT", error: message, aborted: false };
+    return { status: "RATE_LIMIT", error: message, aborted: false, httpStatus: error.status ?? 429 };
   }
   if (error instanceof OpenAI.APIError) {
     const status = error.status ?? 0;
@@ -199,12 +228,30 @@ function describeError(error: unknown): { status: AiUsageStatus; error: string; 
       status: status === 429 ? "RATE_LIMIT" : "PROVIDER_ERROR",
       error: `HTTP ${status}${message ? `: ${message}` : ""}`,
       aborted: false,
+      httpStatus: status,
     };
   }
   if (error instanceof Error && (error.name === "AbortError" || /timed? ?out/i.test(message))) {
     return { status: "TIMEOUT", error: message, aborted: false };
   }
   return { status: "PROVIDER_ERROR", error: message, aborted: false };
+}
+
+/**
+ * True when the next model of the SAME provider would fail the same way, so the
+ * chain should move straight to the next provider instead of spending attempts.
+ *
+ *  - 401/403: the key is wrong for every model of that provider.
+ *  - TIMEOUT: the provider is slow right now; another model on it is unlikely to
+ *    be faster, and re-trying would double the worst-case latency of a request
+ *    (and of the "test provider" button).
+ *
+ * Everything else — 404 retired model, 400, 429, 5xx, empty answer — gets the
+ * provider's fallback model.
+ */
+function skipRemainingModels(error: { status: AiUsageStatus; httpStatus?: number }): boolean {
+  if (error.httpStatus === 401 || error.httpStatus === 403) return true;
+  return error.status === "TIMEOUT";
 }
 
 interface ProviderCallResult {
@@ -222,8 +269,8 @@ async function callProvider(
   messages: AiMessage[],
   options: AiChatOptions,
   timeoutMs: number,
+  model: string,
 ): Promise<ProviderCallResult> {
-  const model = resolveModel(provider, options);
   const client = new OpenAI({
     apiKey,
     baseURL: provider.baseUrl,
@@ -265,31 +312,58 @@ export async function chat(messages: AiMessage[], options: AiChatOptions = {}): 
   const startedAt = Date.now();
 
   let anyConfigured = false;
+  let cancelled = false;
 
   for (const provider of order) {
-    const model = resolveModel(provider, options);
+    if (cancelled) break;
+
     const apiKey = providerApiKey(provider);
+    // `models[0]` first, then that provider's fallbacks (a retired model ID must
+    // not cost the whole provider).
+    const models = providerModels(provider, options);
 
     if (!apiKey) {
-      const attempt: AiAttempt = { provider: provider.id, model, status: "MISSING_KEY", durationMs: 0 };
+      const attempt: AiAttempt = {
+        provider: provider.id,
+        model: models[0] ?? "",
+        status: "MISSING_KEY",
+        durationMs: 0,
+      };
       attempts.push(attempt);
       await record(onUsage, { attempt, options });
       continue;
     }
     anyConfigured = true;
 
-    const attemptStarted = Date.now();
-    try {
-      const result = await callProvider(provider, apiKey, normalised, options, timeoutMs);
-      const durationMs = Date.now() - attemptStarted;
+    for (const [index, model] of models.entries()) {
+      const attemptStarted = Date.now();
+      try {
+        const result = await callProvider(provider, apiKey, normalised, options, timeoutMs, model);
+        const durationMs = Date.now() - attemptStarted;
 
-      if (result.empty) {
+        if (result.empty) {
+          const attempt: AiAttempt = {
+            provider: provider.id,
+            model: result.model,
+            status: "EMPTY_RESPONSE",
+            durationMs,
+            error: "Provider returned an empty message.",
+          };
+          attempts.push(attempt);
+          await record(onUsage, {
+            attempt,
+            options,
+            inputTokens: result.inputTokens,
+            outputTokens: result.outputTokens,
+          });
+          continue;
+        }
+
         const attempt: AiAttempt = {
           provider: provider.id,
           model: result.model,
-          status: "EMPTY_RESPONSE",
+          status: "OK",
           durationMs,
-          error: "Provider returned an empty message.",
         };
         attempts.push(attempt);
         await record(onUsage, {
@@ -298,56 +372,50 @@ export async function chat(messages: AiMessage[], options: AiChatOptions = {}): 
           inputTokens: result.inputTokens,
           outputTokens: result.outputTokens,
         });
-        continue;
+
+        return {
+          text: result.text,
+          provider: provider.id,
+          model: result.model,
+          usage: {
+            inputTokens: result.inputTokens,
+            outputTokens: result.outputTokens,
+            totalTokens: result.inputTokens + result.outputTokens,
+            durationMs,
+          },
+          attempts,
+        };
+      } catch (error) {
+        const failure = describeError(error);
+        const attempt: AiAttempt = {
+          provider: provider.id,
+          model,
+          status: failure.status,
+          durationMs: Date.now() - attemptStarted,
+          error: failure.error.slice(0, 300),
+        };
+        attempts.push(attempt);
+        await record(onUsage, { attempt, options });
+
+        // A caller-side cancellation is not a provider problem: stop the chain.
+        if (failure.aborted) {
+          cancelled = true;
+          break;
+        }
+
+        const more = index < models.length - 1;
+        logger.warn(
+          more ? "AI model failed; trying the provider's fallback model" : "AI provider failed; trying the next one",
+          {
+            provider: provider.id,
+            model,
+            status: failure.status,
+            error: failure.error,
+          },
+        );
+
+        if (skipRemainingModels(failure)) break;
       }
-
-      const attempt: AiAttempt = {
-        provider: provider.id,
-        model: result.model,
-        status: "OK",
-        durationMs,
-      };
-      attempts.push(attempt);
-      await record(onUsage, {
-        attempt,
-        options,
-        inputTokens: result.inputTokens,
-        outputTokens: result.outputTokens,
-      });
-
-      return {
-        text: result.text,
-        provider: provider.id,
-        model: result.model,
-        usage: {
-          inputTokens: result.inputTokens,
-          outputTokens: result.outputTokens,
-          totalTokens: result.inputTokens + result.outputTokens,
-          durationMs,
-        },
-        attempts,
-      };
-    } catch (error) {
-      const { status, error: detail, aborted } = describeError(error);
-      const attempt: AiAttempt = {
-        provider: provider.id,
-        model,
-        status,
-        durationMs: Date.now() - attemptStarted,
-        error: detail.slice(0, 300),
-      };
-      attempts.push(attempt);
-      await record(onUsage, { attempt, options });
-
-      logger.warn("AI provider failed; trying the next one", {
-        provider: provider.id,
-        model,
-        status,
-        error: detail,
-      });
-
-      // A caller-side cancellation is not a provider problem: stop the chain.
-      if (aborted) break;
     }
   }
 

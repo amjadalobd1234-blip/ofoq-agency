@@ -46,8 +46,8 @@ describe("AI provider registry", () => {
     const byId = Object.fromEntries(AI_PROVIDERS.map((provider) => [provider.id, provider]));
 
     expect(byId.groq?.baseUrl).toBe("https://api.groq.com/openai/v1");
-    expect(byId.groq?.models).toEqual(["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]);
-    expect(byId.groq?.dailyLimit).toBe(14_400);
+    expect(byId.groq?.models).toEqual(["openai/gpt-oss-120b", "openai/gpt-oss-20b"]);
+    expect(byId.groq?.dailyLimit).toBe(1_000);
     expect(byId.groq?.limitUnit).toBe("day");
 
     expect(byId.gemini?.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta/openai");
@@ -56,8 +56,8 @@ describe("AI provider registry", () => {
 
     expect(byId.nvidia?.baseUrl).toBe("https://integrate.api.nvidia.com/v1");
     expect(byId.nvidia?.models).toEqual([
-      "meta/llama-3.3-70b-instruct",
-      "nvidia/llama-3.1-nemotron-70b-instruct",
+      "nvidia/nemotron-3-super-120b-a12b",
+      "nvidia/nemotron-3.5-lightning-30b-a3b",
     ]);
     expect(byId.nvidia?.dailyLimit).toBe(40);
     expect(byId.nvidia?.limitUnit).toBe("minute");
@@ -72,8 +72,8 @@ describe("AI provider registry", () => {
 
     expect(byId.openrouter?.baseUrl).toBe("https://openrouter.ai/api/v1");
     expect(byId.openrouter?.models).toEqual([
-      "meta-llama/llama-3.3-70b-instruct:free",
-      "qwen/qwen-2.5-72b-instruct:free",
+      "google/gemma-4-31b-it:free",
+      "google/gemma-4-26b-a4b-it:free",
     ]);
     expect(byId.openrouter?.dailyLimit).toBe(50);
   });
@@ -108,13 +108,32 @@ describe("AI provider registry", () => {
     expect(statuses[0]?.id).toBe("groq");
     expect(statuses.find((status) => status.id === "cohere")?.configured).toBe(true);
     expect(statuses.find((status) => status.id === "groq")?.configured).toBe(false);
-    expect(statuses.find((status) => status.id === "groq")?.activeModel).toBe("llama-3.3-70b-versatile");
+    expect(statuses.find((status) => status.id === "groq")?.activeModel).toBe("openai/gpt-oss-120b");
     expect(statuses.find((status) => status.id === "cohere")?.arabicFirst).toBe(true);
 
     // The badge name for the local rules engine is part of the same vocabulary.
     expect(providerLabel("groq", "ar")).toBe("Groq");
     expect(providerLabel("rules", "en")).toBe("local rules");
     expect(providerLabel("unknown", "ar")).toBe("unknown");
+  });
+
+  it("gives every provider a same-provider fallback model, so one retired ID cannot kill it", () => {
+    for (const provider of AI_PROVIDERS) {
+      const models = [...provider.models];
+      // models[0] is the default, the remaining entries are the fallbacks, and
+      // the list itself is what `providerStatuses().activeModel` reports.
+      expect(models.length).toBeGreaterThanOrEqual(2);
+      expect(new Set(models).size).toBe(models.length);
+      expect(models.every((model) => model.trim().length > 0)).toBe(true);
+    }
+
+    // No retired 2025-era ID may sneak back in.
+    const everyModel = AI_PROVIDERS.flatMap((provider) => [...provider.models]).join(" ");
+    expect(everyModel).not.toMatch(/llama-3\.3-70b-versatile/);
+    expect(everyModel).not.toMatch(/llama-3\.1-8b-instant/);
+    expect(everyModel).not.toMatch(/meta\/llama-3\.3-70b-instruct/);
+    expect(everyModel).not.toMatch(/meta-llama\/llama-3\.3-70b-instruct:free/);
+    expect(everyModel).not.toMatch(/qwen-2\.5-72b-instruct/);
   });
 
   it("never hardcodes a key in the AI or email source files", () => {

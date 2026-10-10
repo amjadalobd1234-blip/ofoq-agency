@@ -39,7 +39,7 @@ describe("Ofoq assistant provider chain", () => {
     vi.stubEnv("GROQ_API_KEY", "unit-test-key");
     const fetchMock = vi
       .fn()
-      .mockResolvedValue(completionResponse("Tell me about your main goal.", { model: "llama-3.3-70b-versatile" }));
+      .mockResolvedValue(completionResponse("Tell me about your main goal.", { model: "openai/gpt-oss-120b" }));
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await completeOfoqChat({
@@ -52,7 +52,7 @@ describe("Ofoq assistant provider chain", () => {
       text: "Tell me about your main goal.",
       provider: "groq",
       providerName: "Groq",
-      model: "llama-3.3-70b-versatile",
+      model: "openai/gpt-oss-120b",
       ai: true,
     });
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -83,7 +83,9 @@ describe("Ofoq assistant provider chain", () => {
     expect(result.provider).toBe("rules");
     expect(result.ai).toBe(false);
     expect(result.text).toContain("السعر");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // Every declared model of the two configured providers is attempted
+    // (Groq: 2, Gemini: 3) before the rules engine takes over.
+    expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 
   it("keeps the guardrails and trims the conversation context", () => {
