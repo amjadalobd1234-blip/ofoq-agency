@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 
-import { providerLabel } from "@/lib/ai/providers";
 import type { Locale } from "@/lib/domain/types";
 import { dictionaries } from "@/lib/i18n/dictionaries";
 
@@ -115,7 +114,7 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
             return <article className={`chat-message ${own ? "chat-message-client" : "chat-message-assistant"}`} key={message.id}>
               {!own && <span className="message-sender">{message.sender === "STAFF" ? (ar ? "فريق أفق" : "Ofoq team") : copy.title}</span>}
               <p dir={message.language === "en" ? "ltr" : message.language === "ar" ? "rtl" : undefined}>{message.body}</p>
-              {!own && message.provider && <span className="message-provider-badge">{ar ? `بواسطة ${providerLabel(message.provider, "ar")}` : `by ${providerLabel(message.provider, "en")}`}</span>}
+
               <time>{formatTime(message.createdAt, locale)}</time>
             </article>;
           })}

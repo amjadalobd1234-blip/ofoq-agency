@@ -1,14 +1,20 @@
 /**
  * مساعد أفق — the Ofoq assistant.
  *
- * The assistant is the only AI surface a client sees. It now runs on the shared
+ * The assistant is the only AI surface a client sees. It runs on the shared
  * `ai-service` chain (Groq → Gemini → NVIDIA → Cohere → OpenRouter, with Cohere
  * promoted for Arabic) and keeps the local deterministic rules engine as a hard
  * fallback: if no provider is configured, or every provider fails, the client
  * still gets an answer that never invents prices, promises or results.
  *
- * The provider that wrote each reply is reported back, so the conversation can
- * label messages with a small "بواسطة Groq" badge.
+ * Full conversation history (the last MAX_CONTEXT_TURNS client/assistant turns)
+ * is forwarded on every call, so switching providers mid-conversation — whether
+ * by auto-routing (Arabic → Cohere), rate-limit fallback, or the operator
+ * changing priorities — never loses context.
+ *
+ * The provider id/model are still reported back for diagnostics (`ai_usage`
+ * logging and admin views). They are stored in `messages.meta` but are not
+ * surfaced to clients in the chat UI.
  */
 import type { AiUsageSink } from "@/lib/ai/usage";
 import { chat, type AiMessage } from "@/lib/ai/ai-service";

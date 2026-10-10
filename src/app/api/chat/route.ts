@@ -36,7 +36,8 @@ export async function GET() {
   if (error) return rpcFailureResponse(error);
 
   // The first configured provider is what the assistant will try first; the
-  // browser only needs its display name for the "بواسطة …" badge and a flag.
+  // browser only needs its id/name for the connectivity notice and a flag.
+  // Provider details per message are no longer shown in the client UI.
   const provider = firstConfiguredProvider();
   return Response.json({
     data: data as BootstrapPayload,
