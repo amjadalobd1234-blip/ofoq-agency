@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 
+import { providerLabel } from "@/lib/ai/providers";
 import type { Locale } from "@/lib/domain/types";
 import { dictionaries } from "@/lib/i18n/dictionaries";
 
@@ -11,6 +12,8 @@ interface ChatMessage {
   body: string;
   language: string;
   createdAt: string;
+  /** Which engine wrote an assistant reply: "groq", "cohere", … or "rules". */
+  provider?: string | null;
 }
 
 export function AssistantChat({ locale, intent }: { locale: Locale; intent?: string }) {
@@ -70,7 +73,7 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
       setMessages((current) => [
         ...current.filter((item) => item.id !== tempId),
         result.userMessage as ChatMessage,
-        result.reply as ChatMessage,
+        { ...(result.reply as ChatMessage), provider: result.provider ?? result.reply?.provider ?? null },
       ]);
       setProviderAvailable(Boolean(result.providerAvailable));
     } catch (reason) {
@@ -103,7 +106,7 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
         </div>
 
         {intent === "service_request" && <div className="chat-context-note">{ar ? "ابدأ بوصف الخدمة أو النتيجة التي تبحث عنها. لا تحتاج إلى تعبئة نموذج طويل." : "Describe the service or outcome you need. There is no long form to complete."}</div>}
-        {ready && <div className="chat-provider-note"><span>i</span>{providerAvailable ? (ar ? "مفتاح Gemini مهيأ؛ قد تُرسل الرسائل إلى Google لتوليد الرد، وقد نستخدم ردًا محليًا إذا تعذّرت الخدمة. لا تشارك كلمات مرور أو بيانات دفع." : "Gemini is configured. Messages may be sent to Google for generation, with a local fallback if unavailable. Do not share passwords or payment details.") : copy.providerOff}</div>}
+        {ready && <div className="chat-provider-note"><span>i</span>{providerAvailable ? (ar ? "المساعد متصل بمزودي الذكاء الاصطناعي (Groq، Gemini، Cohere وغيرها). قد تُرسل رسائل المحادثة إلى المزود لتوليد الرد، ونعود إلى الردود المحلية إذا تعذّرت الخدمة. لا تشارك كلمات مرور أو بيانات دفع." : "The assistant is connected to AI providers (Groq, Gemini, Cohere and others). Conversation messages may be sent to a provider for generation, with local replies as a fallback. Do not share passwords or payment details.") : copy.providerOff}</div>}
         {error && <div className="form-notice form-notice-error chat-error" role="alert">{error}</div>}
 
         <div className="chat-messages" role="log" aria-live="polite" aria-relevant="additions text">
@@ -112,6 +115,7 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
             return <article className={`chat-message ${own ? "chat-message-client" : "chat-message-assistant"}`} key={message.id}>
               {!own && <span className="message-sender">{message.sender === "STAFF" ? (ar ? "فريق أفق" : "Ofoq team") : copy.title}</span>}
               <p dir={message.language === "en" ? "ltr" : message.language === "ar" ? "rtl" : undefined}>{message.body}</p>
+              {!own && message.provider && <span className="message-provider-badge">{ar ? `بواسطة ${providerLabel(message.provider, "ar")}` : `by ${providerLabel(message.provider, "en")}`}</span>}
               <time>{formatTime(message.createdAt, locale)}</time>
             </article>;
           })}

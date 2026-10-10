@@ -74,7 +74,8 @@ export function renderSupabaseSetupSql(migrations: GeneratedMigration[], rootDir
       "-- Ofoq / Supabase PostgreSQL setup",
       "-- Generated from db/migrations/sqlite/*.sql. Do not edit by hand.",
       "-- Regenerate with: npm run db:generate-postgres",
-      "-- Creates 35 application tables plus the _migrations tracking table (36 total).",
+      "-- Creates 35 application tables plus the _migrations tracking table, the",
+      "-- Supabase portal objects, and the ai_usage log (37 tables in total).",
       "-- Safe to re-run: existing tables and indexes are left unchanged.",
       "-- The bundle also installs Supabase Auth triggers, RLS-safe REST RPCs, and column grants.",
       "-- Run this as the Supabase database owner (normally `postgres`).",
@@ -93,18 +94,25 @@ export function renderSupabaseSetupSql(migrations: GeneratedMigration[], rootDir
     }
   }
 
-  // Supabase-specific Auth triggers, REST/RLS policies, and safe RPCs are kept
-  // separate from the portable SQLite source migrations. Include them in the
-  // manual SQL Editor bundle without ever opening a database connection here.
-  const portalSqlPath = path.join(rootDir, "db", "migrations", "supabase", "0001_auth_portal.sql");
-  if (fs.existsSync(portalSqlPath)) {
-    setupStatements.push(
-      [
-        "-- Supabase Auth, client portal, chat RPCs and RLS/column privileges.",
-        "-- Source: db/migrations/supabase/0001_auth_portal.sql.",
-        fs.readFileSync(portalSqlPath, "utf8").trim(),
-      ].join("\n"),
-    );
+  // Supabase-specific Auth triggers, REST/RLS policies, safe RPCs and the AI
+  // usage log are kept separate from the portable SQLite source migrations.
+  // Include every file in db/migrations/supabase (filename order) in the manual
+  // SQL Editor bundle, without ever opening a database connection here.
+  const supabaseDir = path.join(rootDir, "db", "migrations", "supabase");
+  if (fs.existsSync(supabaseDir)) {
+    const supabaseFiles = fs
+      .readdirSync(supabaseDir)
+      .filter((file) => file.endsWith(".sql"))
+      .sort();
+    for (const file of supabaseFiles) {
+      setupStatements.push(
+        [
+          `-- Supabase Auth, portal RPCs, RLS/column privileges and platform logs.`,
+          `-- Source: db/migrations/supabase/${file}.`,
+          fs.readFileSync(path.join(supabaseDir, file), "utf8").trim(),
+        ].join("\n"),
+      );
+    }
   }
 
   const appliedRows = migrations

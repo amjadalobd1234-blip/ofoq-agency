@@ -69,3 +69,74 @@ export function rpcFailureResponse(error: { code?: string; message?: string }): 
   // Do not send SQL, schema names, or provider details back to the browser.
   return Response.json({ error: "Unable to load platform data right now." }, { status: 502, headers: { "Cache-Control": "no-store" } });
 }
+
+/** The caller's own profile row, as far as RLS and column grants allow. */
+export interface SupabaseProfile {
+  id: string;
+  name: string | null;
+  email: string | null;
+  /** OWNER | PARTNER | CLIENT (validated by the database constraint). */
+  role: "OWNER" | "PARTNER" | "CLIENT";
+  status: string;
+  locale: string | null;
+}
+
+const PROFILE_COLUMNS = "id, name, email, role, status, locale";
+
+/**
+ * Reads the signed-in user's own profile with the caller's JWT.
+ *
+ * `public.users` is protected by the `ofoq_user_read_self` policy plus column
+ * grants, so this can only ever return the caller's own row — which is exactly
+ * what an API route needs to answer "is this user staff?".
+ */
+export async function fetchOwnProfile(
+  client: ServerClient,
+  userId: string,
+): Promise<{ profile: SupabaseProfile; error?: never } | { profile?: never; error: { code?: string; message?: string } }> {
+  const { data, error } = await client
+    .from("users")
+    .select(PROFILE_COLUMNS)
+    .eq("id", userId)
+    .maybeSingle();
+  if (error) return { error };
+  if (!data) return { error: { code: "NO_PROFILE", message: "No platform profile for this account." } };
+  return { profile: data as SupabaseProfile };
+}
+
+function inactiveSessionResponse(): Response {
+  return Response.json(
+    { error: "Your session is not active. Sign in again or contact the agency." },
+    { status: 403, headers: { "Cache-Control": "no-store" } },
+  );
+}
+
+/**
+ * Route guard for staff-only or owner-only endpoints.
+ *
+ * Returns the profile when the caller holds one of `allowed` roles and the
+ * account is ACTIVE; otherwise a ready-to-return Response. The database still
+ * re-checks every staff RPC, so this is an early, friendlier gate — not the only
+ * line of defence.
+ */
+export async function requireOwnRole(
+  client: ServerClient,
+  userId: string,
+  allowed: readonly SupabaseProfile["role"][],
+): Promise<{ profile: SupabaseProfile; response?: never } | { profile?: never; response: Response }> {
+  const { profile, error } = await fetchOwnProfile(client, userId);
+  if (!profile) {
+    if (error?.code === "NO_PROFILE") return { response: inactiveSessionResponse() };
+    return { response: rpcFailureResponse(error ?? {}) };
+  }
+  if (profile.status !== "ACTIVE") return { response: inactiveSessionResponse() };
+  if (!allowed.includes(profile.role)) {
+    return {
+      response: Response.json(
+        { error: "You do not have permission for this action." },
+        { status: 403, headers: { "Cache-Control": "no-store" } },
+      ),
+    };
+  }
+  return { profile };
+}

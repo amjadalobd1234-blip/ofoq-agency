@@ -519,7 +519,12 @@ BEGIN
   FROM (
     SELECT jsonb_build_object(
       'id', m.id, 'sender', m.sender_type, 'body', m.body,
-      'language', m.language, 'createdAt', m.created_at
+      'language', m.language, 'createdAt', m.created_at,
+      -- Provider that wrote an assistant reply ("groq", "cohere", … or "rules"),
+      -- so the client can label the message with a small "بواسطة Groq" badge.
+      -- `meta` is TEXT holding a JSON object; the guard keeps malformed legacy
+      -- values from breaking the whole conversation load.
+      'provider', CASE WHEN coalesce(m.meta, '') LIKE '{%' THEN nullif(m.meta::jsonb ->> 'provider', '') ELSE NULL END
     ) AS message, m.created_at
     FROM public.messages AS m
     WHERE m.conversation_id = v_conversation_id
@@ -648,7 +653,8 @@ BEGIN
 
   RETURN jsonb_build_object(
     'id', v_message_id, 'sender', 'ASSISTANT', 'body', trim(p_body),
-    'language', v_language, 'createdAt', v_now
+    'language', v_language, 'createdAt', v_now,
+    'provider', coalesce(nullif(p_provider, ''), 'rules')
   );
 END;
 $function$;
