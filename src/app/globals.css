@@ -2011,6 +2011,54 @@ button:disabled {
 .integration-card p { margin: 0; color: #817d74; font-size: 10px; line-height: 1.7; }
 .admin-generated-at { margin: 0; color: #716e66; font-size: 9px; text-align: end; }
 
+/* AI provider status (owner settings) */
+.integrations-settings { gap: 18px; }
+.integrations-lead { margin: 8px 0 0; max-width: 640px; color: #8a8579; font-size: 10px; line-height: 1.8; }
+.provider-list { display: grid; gap: 10px; }
+.provider-row { display: flex; align-items: flex-start; gap: 12px; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 9px; background: rgba(255, 255, 255, 0.02); padding: 13px 14px; }
+.provider-dot { width: 9px; height: 9px; flex: 0 0 auto; margin-top: 5px; border-radius: 50%; background: #5d5a52; box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.03); }
+.provider-dot-on { background: #46c07a; box-shadow: 0 0 0 3px rgba(70, 192, 122, 0.13); }
+.provider-dot-off { background: #c0503f; box-shadow: 0 0 0 3px rgba(192, 80, 63, 0.12); }
+.provider-row-main { display: grid; min-width: 0; flex: 1; gap: 4px; }
+.provider-row-main strong { display: flex; align-items: center; gap: 8px; color: #e6e1d7; font-size: 12px; }
+.provider-row-main span { color: #837f76; font-size: 10px; line-height: 1.6; }
+.provider-row-main code { border: 1px solid rgba(212, 175, 55, 0.2); border-radius: 4px; background: rgba(212, 175, 55, 0.05); padding: 1px 5px; color: #cfb95f; font-family: var(--font-latin); font-size: 9px; }
+.provider-note { color: #6f6b63 !important; }
+.provider-tag { border: 1px solid rgba(212, 175, 55, 0.3); border-radius: 999px; padding: 1px 7px; color: #cfb95f; font-size: 8px; font-weight: 500; }
+.provider-row-side { display: grid; flex: 0 0 auto; justify-items: end; gap: 5px; text-align: end; }
+.usage-counter { color: #a49f94; font-size: 10px; }
+.usage-counter strong { color: var(--gold-light); font-family: var(--font-latin); font-size: 11px; }
+.usage-counter em { color: #c0503f; font-style: normal; }
+.usage-quota { color: #6f6b63; font-size: 9px; }
+.provider-test-button { min-height: 30px; border: 1px solid rgba(212, 175, 55, 0.35); border-radius: 3px; background: rgba(212, 175, 55, 0.07); padding: 0 13px; color: var(--gold-light); cursor: pointer; font-family: inherit; font-size: 10px; }
+.provider-test-button:hover:not(:disabled) { border-color: var(--gold); background: rgba(212, 175, 55, 0.14); }
+.provider-test-button:disabled { opacity: 0.55; cursor: progress; }
+.provider-test-result { display: grid; gap: 2px; font-size: 9px; }
+.provider-test-result.is-ok { color: #46c07a; }
+.provider-test-result.is-fail { color: #c0503f; }
+.provider-test-result small { max-width: 230px; overflow: hidden; color: #6f6b63; text-overflow: ellipsis; white-space: nowrap; }
+.integrations-hint { display: flex; align-items: flex-start; gap: 8px; margin: 14px 0 0; border: 1px dashed rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 11px 13px; color: #86827a; font-size: 9.5px; line-height: 1.8; }
+.integrations-hint-warn { border-color: rgba(212, 175, 55, 0.35); color: #cfb95f; }
+.integrations-back-link { margin: 16px 0 0; }
+.admin-settings-link { margin: 0 0 14px; }
+.usage-table { display: grid; gap: 2px; margin-top: 4px; }
+.usage-row { display: grid; grid-template-columns: 1.1fr 1.5fr 1fr 0.7fr 0.7fr 1fr; align-items: center; gap: 9px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding-block: 9px; color: #a8a49a; font-size: 10px; }
+.usage-row-head { border-bottom-color: rgba(212, 175, 55, 0.2); color: #7e7a71; font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; }
+.usage-row span { display: grid; min-width: 0; gap: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-row small { color: #6c6860; font-size: 8px; }
+.usage-row code { color: #cfb95f; font-family: var(--font-latin); font-size: 9px; }
+.usage-status { justify-self: start; }
+.usage-status-ok { border-color: rgba(70, 192, 122, 0.4); background: rgba(70, 192, 122, 0.08); color: #56c98a; }
+.usage-status-missing_key,
+.usage-status-unavailable { border-color: rgba(192, 80, 63, 0.4); background: rgba(192, 80, 63, 0.08); color: #c0503f; }
+.usage-status-rate_limit,
+.usage-status-timeout,
+.usage-status-empty_response { border-color: rgba(212, 175, 55, 0.35); color: #cfb95f; }
+.usage-status-provider_error { border-color: rgba(192, 80, 63, 0.35); color: #c98a56; }
+
+/* "بواسطة Groq" provenance badge under assistant replies */
+.message-provider-badge { justify-self: start; border: 1px solid rgba(212, 175, 55, 0.22); border-radius: 999px; background: rgba(212, 175, 55, 0.05); padding: 1px 8px; color: #a2914f; font-size: 8px; letter-spacing: 0.02em; }
+
 @media (min-width: 620px) {
   .auth-topbar { width: min(1320px, calc(100% - 56px)); }
   .auth-main { padding-inline: 24px; }

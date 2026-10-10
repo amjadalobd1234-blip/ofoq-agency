@@ -37,7 +37,7 @@ describe("PostgreSQL schema artifacts", () => {
     expect(setupSql).toBe(renderSupabaseSetupSql(expected));
   });
 
-  it("contains the 35 application tables and 36 total setup tables", () => {
+  it("contains the 35 application tables and 37 total setup tables", () => {
     const sourceTables = listMigrations(path.join(rootDir, "db", "migrations", "sqlite"))
       .flatMap((migration) => splitStatements(migration.sql))
       .map(tableName)
@@ -53,10 +53,12 @@ describe("PostgreSQL schema artifacts", () => {
 
     expect(new Set(sourceTables).size).toBe(35);
     expect(new Set(postgresTables).size).toBe(35);
-    expect(new Set(setupTables).size).toBe(36);
+    // 35 application tables + _migrations + the Supabase-only ai_usage log.
+    expect(new Set(setupTables).size).toBe(37);
     expect(new Set(setupTables)).toContain("_migrations");
     expect(new Set(setupTables)).toContain("users");
     expect(new Set(setupTables)).toContain("job_runs");
+    expect(new Set(setupTables)).toContain("ai_usage");
   });
 
   it("orders foreign-key dependencies before dependent PostgreSQL tables", () => {

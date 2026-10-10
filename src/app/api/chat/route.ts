@@ -1,8 +1,9 @@
 import { z } from "zod";
 
 import { detectLanguage } from "@/lib/ai/language";
-import { completeOfoqChat, type ChatTurn } from "@/lib/ai/gemini-chat";
-import { getEnv } from "@/lib/config/env";
+import { completeOfoqChat, type ChatTurn } from "@/lib/ai/assistant-chat";
+import { anyProviderConfigured, firstConfiguredProvider, providerLabel } from "@/lib/ai/providers";
+import { aiUsageRpcArgs, safeUsageSink } from "@/lib/ai/usage";
 import { requireSupabaseUser, rpcFailureResponse } from "@/lib/supabase/route-auth";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +17,7 @@ interface BootstrapPayload {
   conversationId: string;
   customerName: string;
   language: "ar" | "en";
-  messages: Array<{ id: string; sender: string; body: string; language: string; createdAt: string }>;
+  messages: Array<{ id: string; sender: string; body: string; language: string; createdAt: string; provider?: string | null }>;
 }
 
 interface SentPayload {
@@ -33,10 +34,17 @@ export async function GET() {
 
   const { data, error } = await auth.client.rpc("ofoq_client_chat_bootstrap");
   if (error) return rpcFailureResponse(error);
-  const env = getEnv();
+
+  // The first configured provider is what the assistant will try first; the
+  // browser only needs its display name for the "بواسطة …" badge and a flag.
+  const provider = firstConfiguredProvider();
   return Response.json({
     data: data as BootstrapPayload,
-    provider: { name: env.gemini.enabled ? "gemini" : "rules", configured: env.gemini.enabled },
+    provider: {
+      name: provider?.id ?? "rules",
+      label: providerLabel(provider?.id ?? "rules", "ar"),
+      configured: anyProviderConfigured(),
+    },
   }, { headers: { "Cache-Control": "no-store, max-age=0" } });
 }
 
@@ -67,10 +75,20 @@ export async function POST(request: Request) {
     return Response.json({ error: "The conversation could not be loaded. Refresh and try again." }, { status: 502 });
   }
 
+  // Usage rows are attributed to the signed-in client, with the caller's JWT.
+  const { data: customer } = await auth.client
+    .from("customers")
+    .select("id")
+    .eq("user_id", auth.user.id)
+    .maybeSingle();
+  const onUsage = safeUsageSink((entry) => auth.client.rpc("ofoq_ai_usage_record", aiUsageRpcArgs(entry)));
+
   const completion = await completeOfoqChat({
     history: turn.messages,
     latestMessage: parsed.data.message,
     locale: turn.language === "en" ? "en" : "ar",
+    customerId: (customer as { id?: string } | null)?.id ?? null,
+    onUsage,
   });
 
   const { data: savedReply, error: replyError } = await auth.client.rpc("ofoq_client_chat_reply", {
@@ -87,7 +105,10 @@ export async function POST(request: Request) {
       userMessage: turn.userMessage,
       reply: savedReply,
       provider: completion.provider,
-      providerConfigured: getEnv().gemini.enabled,
+      providerName: completion.providerName,
+      providerConfigured: anyProviderConfigured(),
+      // The chat panel refreshes its provider note from this flag.
+      providerAvailable: anyProviderConfigured(),
     },
   }, { headers: { "Cache-Control": "no-store, max-age=0" } });
 }

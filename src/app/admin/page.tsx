@@ -62,6 +62,13 @@ export default function AdminPage() {
         title={ar ? "لوحة المالك والشريك" : "Owner and partner dashboard"}
         description={ar ? "مركز المراقبة يعرض بيانات تشغيل فعلية دون اختلاق عملاء أو نتائج." : "The control room shows real operational data without fabricated clients or results."}
       >
+        {user.role === "OWNER" && (
+          <p className="admin-settings-link">
+            <a className="owner-admin-link" href="/admin/settings/integrations">
+              {ar ? "⚙ إعدادات التكاملات (الذكاء الاصطناعي والإيميل)" : "⚙ Integration settings (AI and email)"}
+            </a>
+          </p>
+        )}
         <AdminDashboard locale={locale} />
       </PlatformFrame>
     );
