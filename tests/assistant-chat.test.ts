@@ -88,6 +88,50 @@ describe("Ofoq assistant provider chain", () => {
     expect(fetchMock).toHaveBeenCalledTimes(6);
   });
 
+  it("passes the complete multi-turn history (not just the latest message) to the provider", async () => {
+    clearProviderKeys();
+    vi.stubEnv("GROQ_API_KEY", "unit-test-key");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(completionResponse("Tell me about the platforms.", { model: "openai/gpt-oss-120b" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    // The SQL RPC `ofoq_client_chat_send` inserts the new user message first
+    // and then returns the whole conversation (last 20 turns) in chronological
+    // order, so `history` already ends with the latest user message.
+    const history = [
+      { role: "user" as const, content: "حملة إعلانية لمواقع السوشيال ميديا" },
+      { role: "assistant" as const, content: "شكراً، وضّح فكرتك..." },
+      { role: "user" as const, content: "جلب عملاء" },
+      { role: "assistant" as const, content: "ما نوع النشاط؟" },
+      { role: "user" as const, content: "بيع أدوات تجارة" },
+      { role: "assistant" as const, content: "ما المنصات؟" },
+      { role: "user" as const, content: "فيسبوك وإنستغرام وتيكتوك" },
+    ];
+
+    await completeOfoqChat({
+      history,
+      latestMessage: "فيسبوك وإنستغرام وتيكتوك",
+      locale: "ar",
+    });
+
+    const body = callBody(fetchMock, 0);
+    const sentMessages = body.messages as Array<{ role: string; content: string }>;
+
+    // System guardrails first.
+    expect(sentMessages[0]?.role).toBe("system");
+    expect(sentMessages[0]?.content).toContain("مساعد أفق");
+
+    // The entire multi-turn history must reach the provider — including the
+    // user's very first message — so switching providers mid-conversation
+    // (e.g. Groq → Cohere → Groq) never loses context.
+    const conversationMessages = sentMessages.slice(1);
+    expect(conversationMessages).toHaveLength(history.length);
+    expect(conversationMessages[0]).toEqual({ role: "user", content: "حملة إعلانية لمواقع السوشيال ميديا" });
+    expect(conversationMessages[1]).toEqual({ role: "assistant", content: "شكراً، وضّح فكرتك..." });
+    expect(conversationMessages.at(-1)).toEqual({ role: "user", content: "فيسبوك وإنستغرام وتيكتوك" });
+  });
+
   it("keeps the guardrails and trims the conversation context", () => {
     const history = Array.from({ length: 40 }, (_, index) => ({
       role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),

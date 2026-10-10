@@ -339,6 +339,47 @@ describe("AI service fallback chain", () => {
     expect(callBody(fetchMock, 0).model).toBe("command-r7b-arabic-02-2025");
   });
 
+  it("passes the full multi-turn conversation history to every provider, including fallbacks", async () => {
+    // Regression test for context loss when the chain falls from one provider
+    // to the next (for example Groq → Cohere, or Cohere rate-limited → Groq):
+    // every attempt must receive the entire normalised message array.
+    clearProviderKeys();
+    vi.stubEnv("GROQ_API_KEY", "unit-test-key");
+    vi.stubEnv("GEMINI_API_KEY", "unit-test-key");
+    const fetchMock = vi
+      .fn()
+      // Groq (3 models) all rate-limit, then Gemini answers.
+      .mockResolvedValueOnce(errorResponse(429, "rate limit"))
+      .mockResolvedValueOnce(errorResponse(429, "rate limit"))
+      .mockResolvedValueOnce(errorResponse(429, "rate limit"))
+      .mockResolvedValueOnce(completionResponse("Gemini got it.", { model: "gemini-2.5-flash" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const multiTurn = [
+      { role: "system" as const, content: "You are the assistant." },
+      { role: "user" as const, content: "حملة إعلانية لمواقع السوشيال ميديا" },
+      { role: "assistant" as const, content: "شكراً، وضّح فكرتك..." },
+      { role: "user" as const, content: "جلب عملاء" },
+      { role: "assistant" as const, content: "ما نوع النشاط؟" },
+      { role: "user" as const, content: "بيع أدوات تجارة" },
+      { role: "assistant" as const, content: "ما المنصات؟" },
+      { role: "user" as const, content: "فيسبوك وإنستغرام وتيكتوك" },
+    ];
+
+    const result = await chat(multiTurn);
+
+    expect(result.provider).toBe("gemini");
+    // Every failed Groq attempt AND the successful Gemini attempt must carry
+    // the full message history — not just the last message.
+    for (let i = 0; i < fetchMock.mock.calls.length; i += 1) {
+      const body = callBody(fetchMock, i);
+      const msgs = body.messages as Array<{ role: string; content: string }>;
+      expect(msgs).toHaveLength(multiTurn.length);
+      expect(msgs[0]).toEqual({ role: "system", content: "You are the assistant." });
+      expect(msgs.at(-1)).toEqual({ role: "user", content: "فيسبوك وإنستغرام وتيكتوك" });
+    }
+  });
+
   it("reports a typed unavailable error when every provider fails or none is configured", async () => {
     clearProviderKeys();
     const usage: AiUsageEntry[] = [];
