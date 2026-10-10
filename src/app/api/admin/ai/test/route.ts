@@ -21,6 +21,11 @@ export const runtime = "nodejs";
  *
  * A provider that is not configured answers 200 with `ok: false` and
  * `status: "MISSING_KEY"`: that is a configuration state, not a server error.
+ *
+ * When a provider fails, the reply carries one entry per model that was tried
+ * (`modelsTried`), so "the model is gone" (404), "the key is rejected" (401),
+ * "out of quota" (429) and "paid endpoint" (402) can be told apart from the
+ * owner screen instead of being guessed at.
  */
 const bodySchema = z.object({
   providerId: z.string().trim().min(1).max(40),
@@ -85,17 +90,26 @@ export async function POST(request: Request) {
     );
   } catch (error) {
     if (error instanceof AiUnavailableError) {
-      const attempt = error.attempts.find((item) => item.provider === providerId);
+      const tried = error.attempts.filter((item) => item.provider === providerId);
+      const last = tried.at(-1);
       return Response.json(
         {
           data: {
             ok: false,
             provider: providerId,
             providerName: providerLabel(providerId, "ar"),
-            model: attempt?.model ?? "",
-            status: attempt?.status ?? (error.reason === "no_provider" ? "MISSING_KEY" : "PROVIDER_ERROR"),
+            // The most recent failure is the informative one: a 404 on the first
+            // model often ends with a different reason on the last one.
+            model: last?.model ?? "",
+            status: last?.status ?? (error.reason === "no_provider" ? "MISSING_KEY" : "PROVIDER_ERROR"),
             latencyMs: Date.now() - startedAt,
-            error: attempt?.error ?? error.message,
+            error: last?.error ?? error.message,
+            modelsTried: tried.map((item) => ({
+              model: item.model,
+              status: item.status,
+              durationMs: item.durationMs,
+              error: item.error ?? null,
+            })),
           },
         },
         { headers: { "Cache-Control": "no-store" } },
