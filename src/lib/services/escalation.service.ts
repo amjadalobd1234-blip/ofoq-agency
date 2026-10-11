@@ -333,6 +333,163 @@ export async function fetchEscalationDiagnostics(
   }
 }
 
+/** A PostgREST error, kept whole: code, message, details and hint. */
+export interface PostgrestErrorLike {
+  code?: string | null;
+  message?: string | null;
+  details?: string | null;
+  hint?: string | null;
+}
+
+/** Minimal shape the probe needs, satisfied by the Supabase server client. */
+export interface AlertProbeClient {
+  from(table: "alerts"): {
+    insert(values: Record<string, unknown>): PromiseLike<{ error: PostgrestErrorLike | null }>;
+    delete(): { eq(column: string, value: string): PromiseLike<{ error: PostgrestErrorLike | null }> };
+  };
+}
+
+export interface AlertInsertProbe {
+  /** The id the probe row was written with (also the id it is deleted by). */
+  probeId: string;
+  insert: { ok: boolean; error: PostgrestErrorLike | null };
+  /** Only attempted when the INSERT succeeded. */
+  cleanup: { attempted: boolean; ok: boolean; error: PostgrestErrorLike | null };
+  /** One line on what the failure most likely means. Null when nothing failed. */
+  hint: string | null;
+}
+
+function toErrorLike(error: unknown): PostgrestErrorLike {
+  if (error && typeof error === "object") {
+    const candidate = error as PostgrestErrorLike;
+    return {
+      code: candidate.code ?? null,
+      message: candidate.message ?? String(error),
+      details: candidate.details ?? null,
+      hint: candidate.hint ?? null,
+    };
+  }
+  return { code: null, message: String(error), details: null, hint: null };
+}
+
+/**
+ * Explains a direct INSERT failure on `public.alerts`.
+ *
+ * Migration 0001 revokes every table privilege from `authenticated`, so a
+ * direct INSERT is refused with 42501 before RLS is even evaluated. Migration
+ * 0004's policy only matters once a GRANT exists. The app therefore writes
+ * alerts through `ofoq_client_escalate` by design, and a direct INSERT is
+ * expected to fail.
+ */
+export function describeAlertInsertError(error: PostgrestErrorLike | null): string | null {
+  if (!error) return null;
+  const text = `${error.code ?? ""} ${error.message ?? ""} ${error.details ?? ""}`;
+  if (/\b42501\b/.test(text) && /row-level security/i.test(text)) {
+    return "RLS rejected the row: the alerts_insert_authenticated policy (0004) requires entity_type='conversation', target_role='ANY_STAFF' and severity URGENT/IMPORTANT.";
+  }
+  if (/\b42501\b/.test(text) || /permission denied/i.test(text)) {
+    return "permission denied on public.alerts: the authenticated role has no INSERT grant (0001 revokes all table privileges). This is expected for a direct INSERT; alerts are written only by the ofoq_client_escalate RPC.";
+  }
+  if (/\b42P01\b/.test(text) || /relation .*alerts.* does not exist/i.test(text)) {
+    return "the public.alerts table does not exist — the schema was never fully applied.";
+  }
+  if (/\b23502\b/.test(text)) {
+    return "a NOT NULL column rejected the probe row — compare public.alerts with docs/setup/supabase-setup.sql.";
+  }
+  if (/\b23505\b/.test(text)) {
+    return "a unique constraint rejected the probe row (id or dedupe_key already exists).";
+  }
+  if (/\b23514\b/.test(text)) {
+    return "a CHECK constraint rejected the probe row (severity, status or target_role value).";
+  }
+  return "unclassified INSERT failure — the full error is in the response; compare it with the table definition.";
+}
+
+/**
+ * Writes one real row into `public.alerts` through the caller's own session,
+ * then deletes it. Used by GET /api/debug/escalation?insertTest=1 to find out,
+ * from the actual database, whether a direct INSERT is possible and, if not,
+ * exactly why.
+ *
+ * The probe row is clearly labelled and uses category `DEBUG_PROBE`, which no
+ * dashboard counter groups as a lead. It is removed right after the INSERT.
+ * Nothing throws: every outcome is returned for the caller to show.
+ */
+export async function probeAlertInsert(
+  client: AlertProbeClient,
+  conversationId?: string | null,
+): Promise<AlertInsertProbe> {
+  const probeId = `debug-probe-${globalThis.crypto.randomUUID()}`;
+  const now = new Date().toISOString();
+
+  let insertError: PostgrestErrorLike | null = null;
+  try {
+    const response = await client.from("alerts").insert({
+      id: probeId,
+      severity: "IMPORTANT",
+      category: "DEBUG_PROBE",
+      title_ar: "[اختبار تشخيص] يمكن حذفه",
+      title_en: "[debug probe] safe to delete",
+      body_ar: null,
+      body_en: "Written by GET /api/debug/escalation?insertTest=1 and deleted right after.",
+      entity_type: "conversation",
+      entity_id: conversationId ?? null,
+      target_role: "ANY_STAFF",
+      status: "NEW",
+      dedupe_key: null,
+      meta: JSON.stringify({ source: "debug-probe" }),
+      is_demo: 0,
+      created_at: now,
+      updated_at: now,
+    });
+    insertError = response.error ? toErrorLike(response.error) : null;
+  } catch (error) {
+    insertError = toErrorLike(error);
+  }
+
+  if (insertError) {
+    logger.error("[escalation] debug INSERT probe failed", {
+      probeId,
+      code: insertError.code ?? null,
+      error: insertError.message ?? null,
+      details: insertError.details ?? null,
+      hint: insertError.hint ?? null,
+      explanation: describeAlertInsertError(insertError),
+    });
+    return {
+      probeId,
+      insert: { ok: false, error: insertError },
+      cleanup: { attempted: false, ok: false, error: null },
+      hint: describeAlertInsertError(insertError),
+    };
+  }
+
+  let cleanupError: PostgrestErrorLike | null = null;
+  try {
+    const response = await client.from("alerts").delete().eq("id", probeId);
+    cleanupError = response.error ? toErrorLike(response.error) : null;
+  } catch (error) {
+    cleanupError = toErrorLike(error);
+  }
+
+  if (cleanupError) {
+    logger.error("[escalation] debug INSERT probe row could not be deleted", {
+      probeId,
+      code: cleanupError.code ?? null,
+      error: cleanupError.message ?? null,
+    });
+  }
+
+  return {
+    probeId,
+    insert: { ok: true, error: null },
+    cleanup: { attempted: true, ok: !cleanupError, error: cleanupError },
+    hint: cleanupError
+      ? `the INSERT worked but the probe row ${probeId} was NOT deleted — remove it manually in the Table Editor.`
+      : null,
+  };
+}
+
 /** Every address that must hear about a handoff: configured owner + staff rows. */
 export function escalationRecipients(staffEmails: Array<string | null | undefined>): string[] {
   const configured = getEnv()

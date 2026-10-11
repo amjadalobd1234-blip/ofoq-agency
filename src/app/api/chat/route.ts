@@ -11,6 +11,11 @@ import { fetchOwnProfile, requireSupabaseUser, rpcFailureResponse } from "@/lib/
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+/** Temporary escalation tracing (debug branch). Logs ids and states only, never message text. */
+function trace(step: string, data: Record<string, unknown>): void {
+  console.log(`[escalation-debug] ${step}`, data);
+}
+
 const messageSchema = z.object({
   message: z.string().trim().min(1).max(2000),
 });
@@ -66,6 +71,8 @@ export async function POST(request: Request) {
     return Response.json({ error: "Message must contain between 1 and 2000 characters." }, { status: 400 });
   }
 
+  trace("1 message received", { userId: auth.user.id, chars: parsed.data.message.length });
+
   const detected = detectLanguage(parsed.data.message);
   const { data, error } = await auth.client.rpc("ofoq_client_chat_send", {
     p_body: parsed.data.message,
@@ -75,8 +82,14 @@ export async function POST(request: Request) {
 
   const turn = data as SentPayload;
   if (!turn?.conversationId || !Array.isArray(turn.messages) || !turn.userMessage) {
+    trace("2 chat turn NOT saved", { hasData: Boolean(turn), rpc: "ofoq_client_chat_send" });
     return Response.json({ error: "The conversation could not be loaded. Refresh and try again." }, { status: 502 });
   }
+  trace("2 chat turn saved", {
+    conversationId: turn.conversationId,
+    historyTurns: turn.messages.length,
+    locale: turn.language,
+  });
 
   // Usage rows are attributed to the signed-in client, with the caller's JWT.
   const { data: customer } = await auth.client
@@ -95,6 +108,8 @@ export async function POST(request: Request) {
     onUsage,
   });
 
+  trace("3 assistant reply ready", { provider: completion.provider, replyChars: completion.text.length });
+
   // Real escalation, not a promise.
   //
   // Every assistant reply is checked: did the client ask for a person (or
@@ -112,8 +127,18 @@ export async function POST(request: Request) {
   // role and the client record travel with the call so a refusal can be read
   // straight off the server log (an OWNER with no `customers` row used to be
   // indistinguishable from a wrong conversation id).
+  trace("4 escalation-agent decision", {
+    escalate: decision.escalate,
+    category: decision.category,
+    severity: decision.severity,
+    signals: decision.signals,
+  });
+
   const own = decision.escalate ? await fetchOwnProfile(auth.client, auth.user.id) : null;
   const role = own?.profile?.role ?? null;
+  if (decision.escalate) {
+    trace("5 caller profile", { role, hasCustomerRecord: Boolean(customer), profileReadOk: Boolean(own?.profile) });
+  }
 
   const escalation: EscalationOutcome | null = decision.escalate
     ? await raiseClientEscalation({
@@ -131,6 +156,17 @@ export async function POST(request: Request) {
       })
     : null;
 
+  if (escalation) {
+    trace("6 raiseClientEscalation outcome", {
+      escalated: escalation.escalated,
+      created: escalation.created,
+      alertId: escalation.alertId,
+      conversationStatus: escalation.conversationStatus,
+      error: escalation.error ?? null,
+      emailDelivered: escalation.email.delivered,
+    });
+  }
+
   const replyBody = escalation?.notice ? `${completion.text}\n\n${escalation.notice}` : completion.text;
 
   const { data: savedReply, error: replyError } = await auth.client.rpc("ofoq_client_chat_reply", {
@@ -139,7 +175,15 @@ export async function POST(request: Request) {
     p_language: turn.language,
     p_provider: completion.provider,
   });
-  if (replyError) return rpcFailureResponse(replyError);
+  if (replyError) {
+    trace("7 reply NOT saved", { rpc: "ofoq_client_chat_reply", code: replyError.code ?? null, message: replyError.message ?? null });
+    return rpcFailureResponse(replyError);
+  }
+  trace("7 reply saved", {
+    conversationId: turn.conversationId,
+    noticeAppended: Boolean(escalation?.notice),
+    escalated: Boolean(escalation?.escalated),
+  });
 
   return Response.json({
     data: {
