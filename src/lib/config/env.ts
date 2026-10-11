@@ -98,6 +98,12 @@ export interface AppEnv {
     resendApiKey: string;
     /** True when email is delivered by a real provider rather than logged. */
     live: boolean;
+    /**
+     * Addresses that must hear about every human handoff (OWNER_EMAIL, comma
+     * separated). Empty means "use the staff rows in the database", with the
+     * documented agency fallback applied by the escalation service.
+     */
+    ownerEmails: string[];
   };
 
   payments: {
@@ -228,6 +234,10 @@ export function getEnv(): AppEnv {
       live:
         (emailProvider === "smtp" && Boolean(smtpHost)) ||
         (emailProvider === "resend" && Boolean(resendApiKey)),
+      ownerEmails: str("OWNER_EMAIL")
+        .split(",")
+        .map((address) => address.trim())
+        .filter(Boolean),
     },
 
     payments: {

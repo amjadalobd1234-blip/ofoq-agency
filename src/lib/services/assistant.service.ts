@@ -14,6 +14,7 @@ import { notifyUsers } from "@/lib/services/notifications.service";
 import { listStaffUsers } from "@/lib/repositories/identity.repo";
 import { logActivity } from "@/lib/services/activity.service";
 import { analyseSatisfaction } from "@/lib/agents/specialists/satisfaction.agent";
+import { detectEscalation } from "@/lib/agents/escalation-agent";
 import { handleClientTurn, markJourneyApproved, type AssistantTurnResult } from "@/lib/agents/specialists/orchestrator.agent";
 import { loadProfile } from "@/lib/agents/specialists/needs.agent";
 
@@ -97,7 +98,13 @@ export async function sendClientMessage(input: {
   });
 
   if (turn.escalate) {
-    await notifyStaffOfEscalation({ customer, turn, replyText: turn.reply, conversationId: conversation.id });
+    await notifyStaffOfEscalation({
+      customer,
+      turn,
+      replyText: turn.reply,
+      conversationId: conversation.id,
+      clientMessage: input.body,
+    });
   }
   return {
     conversationId: conversation.id,
@@ -116,8 +123,13 @@ async function notifyStaffOfEscalation(input: {
   turn: AssistantTurnResult;
   replyText: string;
   conversationId: string;
+  clientMessage: string;
 }): Promise<void> {
   const { customer, turn } = input;
+  // Same taxonomy as the client portal chat: an explicit human request or a
+  // complaint is HUMAN_REQUEST/URGENT, anything else keeps its business category.
+  const decision = detectEscalation({ latestMessage: input.clientMessage, assistantReply: input.replyText });
+  const needsApproval = Boolean(turn.escalationReason?.includes("approval"));
   try {
     const staff = await listStaffUsers();
     await notifyUsers(staff, {
@@ -135,8 +147,8 @@ async function notifyStaffOfEscalation(input: {
     });
 
     await raiseAlert({
-      severity: turn.escalationReason?.includes("approval") ? "IMPORTANT" : "URGENT",
-      category: turn.escalationReason?.includes("approval") ? "sales" : "support",
+      severity: decision.severity ?? (needsApproval ? "IMPORTANT" : "URGENT"),
+      category: decision.category ?? (needsApproval ? "sales" : "support"),
       title_ar: "محادثة تحتاج تدخلًا بشريًا",
       title_en: "Conversation needs human attention",
       body_ar: `العميل ${customer.contact_name} — السبب: ${turn.escalationReason ?? "غير محدد"}`,

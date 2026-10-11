@@ -4,6 +4,8 @@ import { detectLanguage } from "@/lib/ai/language";
 import { completeOfoqChat, type ChatTurn } from "@/lib/ai/assistant-chat";
 import { anyProviderConfigured, firstConfiguredProvider, providerLabel } from "@/lib/ai/providers";
 import { aiUsageRpcArgs, safeUsageSink } from "@/lib/ai/usage";
+import { detectEscalation } from "@/lib/agents/escalation-agent";
+import { raiseClientEscalation, type EscalationOutcome } from "@/lib/services/escalation.service";
 import { requireSupabaseUser, rpcFailureResponse } from "@/lib/supabase/route-auth";
 
 export const dynamic = "force-dynamic";
@@ -84,17 +86,43 @@ export async function POST(request: Request) {
     .maybeSingle();
   const onUsage = safeUsageSink((entry) => auth.client.rpc("ofoq_ai_usage_record", aiUsageRpcArgs(entry)));
 
+  const locale = turn.language === "en" ? "en" : "ar";
   const completion = await completeOfoqChat({
     history: turn.messages,
     latestMessage: parsed.data.message,
-    locale: turn.language === "en" ? "en" : "ar",
+    locale,
     customerId: (customer as { id?: string } | null)?.id ?? null,
     onUsage,
   });
 
+  // Real escalation, not a promise.
+  //
+  // Every assistant reply is checked: did the client ask for a person (or
+  // complain), did the reply itself promise a handoff, or is the need now
+  // understood enough to be a lead? When yes, an `alerts` row is written, the
+  // conversation flips to PENDING, the owner is emailed, and only then is the
+  // client told it happened. When the write fails, the client is told that too.
+  const decision = detectEscalation({
+    latestMessage: parsed.data.message,
+    history: turn.messages,
+    assistantReply: completion.text,
+  });
+  const escalation: EscalationOutcome | null = decision.escalate
+    ? await raiseClientEscalation({
+        client: auth.client,
+        conversationId: turn.conversationId,
+        latestMessage: parsed.data.message,
+        history: turn.messages,
+        locale,
+        decision,
+      })
+    : null;
+
+  const replyBody = escalation?.notice ? `${completion.text}\n\n${escalation.notice}` : completion.text;
+
   const { data: savedReply, error: replyError } = await auth.client.rpc("ofoq_client_chat_reply", {
     p_conversation_id: turn.conversationId,
-    p_body: completion.text,
+    p_body: replyBody,
     p_language: turn.language,
     p_provider: completion.provider,
   });
@@ -110,6 +138,17 @@ export async function POST(request: Request) {
       providerConfigured: anyProviderConfigured(),
       // The chat panel refreshes its provider note from this flag.
       providerAvailable: anyProviderConfigured(),
+      // True only when the handoff was actually recorded for the team.
+      escalated: Boolean(escalation?.escalated),
+      escalation: escalation
+        ? {
+            category: escalation.category,
+            severity: escalation.severity,
+            alertId: escalation.alertId,
+            created: escalation.created,
+            emailDelivered: escalation.email.delivered,
+          }
+        : null,
     },
   }, { headers: { "Cache-Control": "no-store, max-age=0" } });
 }

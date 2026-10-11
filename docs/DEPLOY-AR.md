@@ -19,6 +19,11 @@
 - RPCs آمنة لبوابة العميل، لوحة المالك/الشريك، التقييمات المنشورة، والمحادثات.
 - حفظ رسائل العميل وردود مساعد أفق في جدولي `conversations` و`messages` الحاليين.
 - `db/migrations/supabase/0002_ai_usage.sql`: جدول سجل استخدام مزودي الذكاء الاصطناعي مع RPC للكتابة `ofoq_ai_usage_record` وRPC للمالك فقط `ofoq_ai_usage_admin`.
+- `db/migrations/supabase/0003_escalation_alerts.sql`: التصعيد الفعلي لمساعد أفق.
+  - `ofoq_client_escalate`: ينشئ صف `alerts` (severity `URGENT`/`IMPORTANT`، category `HUMAN_REQUEST`/`NEW_LEAD`، `entity_type='conversation'`، `target_role='ANY_STAFF'`، `status='NEW'`)، ويحوّل المحادثة إلى `PENDING`، ويكتب إشعارات `IN_APP` و`EMAIL` لكل مالك/شريك فعّال، ويسجّل الحدث في `activities`.
+  - `ofoq_escalation_email_result`: يسجّل هل وصل بريد المالك فعلًا (SENT/FAILED) حتى لا يبقى الفشل صامتًا.
+  - منع التكرار: تنبيه واحد لكل محادثة/تصنيف/يوم عبر `dedupe_key`، والتنبيه المُغلق يُعاد فتحه عند طلب العميل مرة أخرى.
+  - `ofoq_admin_dashboard` أصبح يعيد `leadRequests` و`totals.newLeads` و`totals.criticalAlerts`، ويحسب `urgentAlerts` من `URGENT` و`IMPORTANT` معًا.
 - عزل سجلات العميل عبر التحقق من `auth.uid()` داخل كل RPC. لا تُعاد التكاليف الداخلية أو الملاحظات الداخلية إلى بوابة العميل.
 
 > لا يتصل هذا الإعداد بقاعدة البيانات من Arena. نفّذ SQL يدويًا في لوحة Supabase فقط، ثم يطلب التطبيق البيانات عبر HTTPS وRLS.
@@ -68,6 +73,7 @@ WHERE lower(email) = lower('owner@example.com');
 | `COHERE_API_KEY` | مزود رابع (الأفضل للعربية، يُقدَّم تلقائيًا للرسائل العربية) — حد 1,000/شهر |
 | `OPENROUTER_API_KEY` | مزود خامس (موديلات مجانية كخط أخير) — حد 50/يوم |
 | `RESEND_API_KEY` | اختياري؛ إرسال قوالب الإيميل (ترحيب/عرض/فاتورة/تنبيه/تحويل بشري) من `src/lib/email/email-service.ts` |
+| `OWNER_EMAIL` | من يستقبل بريد التصعيد (بفاصلة بين العناوين) إضافة إلى حسابات OWNER/PARTNER الفعّالة. عند تركه فارغًا يُستخدم عنوان المالك الافتراضي الموثّق في `src/lib/services/escalation.service.ts` |
 
 في **Cloudflare Pages** تُضاف هذه المتغيرات من **Settings → Variables and Secrets** بنفس الأسماء تمامًا (GROQ_API_KEY، GEMINI_API_KEY، NVIDIA_API_KEY، COHERE_API_KEY، OPENROUTER_API_KEY، RESEND_API_KEY). لا تحتاج إلى إعادة بناء الكود بعد إضافتها، ولا تضع أي مفتاح بصيغة `NEXT_PUBLIC_*`.
 

@@ -18,13 +18,19 @@ interface AdminData {
   totals: {
     customers: number; newCustomers7d: number; activeProjects: number; overdueProjects: number;
     newRequests: number; activeCampaigns: number; reports30d: number; pendingAgentActions: number; urgentAlerts: number;
+    /** Alerts that must be handled now (severity = URGENT). Optional: added with the escalation RPCs. */
+    criticalAlerts?: number;
+    /** Open HUMAN_REQUEST / NEW_LEAD alerts raised by the assistant. */
+    newLeads?: number;
   };
   clients: Array<{ id: string; name: string; companyName?: string | null; email?: string | null; country?: string | null; status: string; createdAt: string }>;
   requests: Array<{ id: string; code: string; status: string; currency: string; totalMinor: number | string; createdByAgent?: string | null; createdAt: string; customerName: string; customerEmail?: string | null }>;
   projects: Array<{ id: string; code: string; title: string; status: string; progress: number; dueDate?: string | null; customerName: string; amountTotalMinor: number | string; internalCostMinor: number | string; createdAt?: string }>;
   campaigns: Array<{ id: string; name: string; platform: string; status: string; currency: string; totalBudgetMinor: number | string; monthlyBudgetMinor: number | string; spentMinor: number | string; syncStatus: string; customerName: string; updatedAt: string }>;
   reports: Array<{ id: string; title: string; type: string; status: string; customerName: string; createdAt: string }>;
-  alerts: Array<{ id: string; severity: string; titleAr: string; titleEn: string; bodyAr?: string | null; bodyEn?: string | null; status: string; createdAt: string }>;
+  alerts: Array<{ id: string; severity: string; category?: string; titleAr: string; titleEn: string; bodyAr?: string | null; bodyEn?: string | null; status: string; createdAt: string; customerName?: string | null }>;
+  /** Open client escalations (HUMAN_REQUEST / NEW_LEAD) — the "new requests" the assistant produced. */
+  leadRequests?: Array<{ id: string; severity: string; category: string; titleAr: string; titleEn: string; bodyAr?: string | null; bodyEn?: string | null; conversationId?: string | null; createdAt: string; customerName?: string | null; customerEmail?: string | null }>;
   agentActions: Array<{ id: string; agentKey: string; action: string; summary: string; reason?: string | null; riskLevel: string; requiresApproval: number | boolean; createdAt: string }>;
   financials: { collected30d: Array<{ currency: string; totalMinor: number | string }>; internalCost30d: Array<{ currency: string; totalMinor: number | string }> };
   integrations: { googleAds: { status: string }; whatsapp: { status: string }; payments: { status: string } };
@@ -34,6 +40,8 @@ interface AdminData {
 const NEW_OFFER_STATUSES = ["DRAFT", "SENT"];
 /** Project statuses that count as active. Must match the RPC's `activeProjects` count. */
 const ACTIVE_PROJECT_STATUSES = ["PLANNING", "IN_PROGRESS", "IN_REVIEW", "REVISIONS"];
+/** Escalation categories raised by the assistant when a human is needed. */
+const LEAD_CATEGORIES = ["NEW_LEAD", "HUMAN_REQUEST"];
 
 export function AdminDashboard({ locale }: { locale: Locale }) {
   const ar = locale === "ar";
@@ -74,6 +82,20 @@ export function AdminDashboard({ locale }: { locale: Locale }) {
   const newOffers = data.requests.filter((item) => NEW_OFFER_STATUSES.includes(item.status));
   const activeProjects = data.projects.filter((project) => ACTIVE_PROJECT_STATUSES.includes(project.status));
   const pendingActions = data.agentActions.filter((action) => Number(action.requiresApproval) === 1);
+  // Client escalations the assistant raised: a person was requested, or the
+  // client's need is understood. Fallback filter keeps the section working if
+  // the RPC returns the plain alerts list only.
+  const leadRequests = (data.leadRequests?.length
+    ? data.leadRequests
+    : data.alerts.filter((alert) => LEAD_CATEGORIES.includes(alert.category ?? ""))
+  ).map((lead) => ({
+    ...lead,
+    customerName: lead.customerName ?? null,
+    customerEmail: "customerEmail" in lead ? lead.customerEmail ?? null : null,
+    conversationId: "conversationId" in lead ? lead.conversationId ?? null : null,
+  }));
+  const criticalAlerts = data.totals.criticalAlerts ?? data.totals.urgentAlerts;
+  const newLeadCount = data.totals.newLeads ?? leadRequests.length;
 
   const collected = formatBuckets(data.financials?.collected30d ?? [], locale);
   const internalCosts = formatBuckets(data.financials?.internalCost30d ?? [], locale);
@@ -90,7 +112,7 @@ export function AdminDashboard({ locale }: { locale: Locale }) {
         <AdminStat label={ar ? "العملاء" : "Clients"} value={data.totals.customers} caption={`${data.totals.newCustomers7d} ${ar ? "جديد هذا الأسبوع" : "new this week"}`} icon="◇" />
         <AdminStat label={ar ? "المشاريع النشطة" : "Active projects"} value={data.totals.activeProjects} caption={`${data.totals.overdueProjects} ${ar ? "متأخر" : "overdue"}`} icon="◈" />
         <AdminStat label={ar ? "الإيرادات · ٣٠ يومًا" : "Revenue · 30 days"} value={hasRevenue ? collected : "—"} caption={hasRevenue ? (ar ? "المحصّل من الفواتير" : "Collected from invoices") : (ar ? "لا توجد مدفوعات خلال ٣٠ يومًا" : "No payments in the last 30 days")} icon="◎" small />
-        <AdminStat label={ar ? "التنبيهات العاجلة" : "Urgent alerts"} value={data.totals.urgentAlerts} caption={`${data.totals.pendingAgentActions} ${ar ? "إجراء بانتظار موافقتك" : "agent actions awaiting approval"}`} icon="!" />
+        <AdminStat label={ar ? "التنبيهات العاجلة" : "Urgent alerts"} value={data.totals.urgentAlerts} caption={`${criticalAlerts} ${ar ? "عاجلة الآن" : "critical now"} · ${newLeadCount} ${ar ? "طلب تواصل جديد" : "new contact requests"}`} icon="!" />
       </section>
 
       <nav className="admin-quick-links" aria-label={ar ? "انتقال سريع" : "Quick links"}>
@@ -110,8 +132,13 @@ export function AdminDashboard({ locale }: { locale: Locale }) {
         </section>
 
         <section className="platform-card content-card" id="requests">
-          <div className="card-heading-row"><div><span className="eyebrow">02 / {ar ? "الطلبات" : "Requests"}</span><h2>{ar ? "الطلبات الجديدة (عروض بانتظار المتابعة)" : "New requests (offers awaiting follow-up)"}</h2></div><span className="mini-count">{data.totals.newRequests}</span></div>
-          {newOffers.length === 0 ? <EmptyAdmin text={ar ? "لا توجد عروض بحالة مسودة أو مُرسلة." : "No offers are in draft or sent status."} /> : <div className="compact-list">{newOffers.map((item) => <article className="compact-row" key={item.id}><div className="compact-row-copy"><strong>{item.code} · {item.customerName}</strong><span>{item.createdByAgent ? `${ar ? "أنشأه وكيل" : "Created by agent"}: ${item.createdByAgent}` : item.customerEmail || item.status}</span></div><div className="compact-row-side"><strong>{formatMoney(item.totalMinor, item.currency, locale)}</strong><StatusLabel status={item.status} locale={locale} /></div></article>)}</div>}
+          <div className="card-heading-row"><div><span className="eyebrow">02 / {ar ? "الطلبات" : "Requests"}</span><h2>{ar ? "الطلبات الجديدة" : "New requests"}</h2><p className="card-subtitle">{ar ? "طلبات تواصل رفعها مساعد أفق + عروض بانتظار المتابعة." : "Contact requests raised by the Ofoq assistant, plus offers awaiting follow-up."}</p></div><span className="mini-count">{data.totals.newRequests + newLeadCount}</span></div>
+          {leadRequests.length === 0 && newOffers.length === 0 ? <EmptyAdmin text={ar ? "لا توجد طلبات جديدة: لا تنبيهات تواصل من المساعد ولا عروض بحالة مسودة أو مُرسلة." : "No new requests: no assistant handoff alerts and no offers in draft or sent status."} /> : (
+            <div className="compact-list">
+              {leadRequests.map((lead) => <article className="alert-row" key={lead.id}><span className={`severity-dot severity-${lead.severity.toLowerCase()}`} /><div className="compact-row-copy"><strong>{lead.customerName || (ar ? lead.titleAr : lead.titleEn)}</strong><span>{ar ? lead.bodyAr : lead.bodyEn}</span><span className="alert-meta">{lead.category === "HUMAN_REQUEST" ? (ar ? "طلب فريق بشري" : "Human handoff") : (ar ? "طلب جديد" : "New lead")}{lead.customerEmail ? ` · ${lead.customerEmail}` : ""} · {formatDate(lead.createdAt, locale)}</span></div><div className="compact-row-side"><span className="status-pill status-new">{ar ? "بانتظار الفريق" : "Awaiting team"}</span><time>{lead.conversationId ? `#${lead.conversationId.slice(0, 8)}` : ""}</time></div></article>)}
+              {newOffers.map((item) => <article className="compact-row" key={item.id}><div className="compact-row-copy"><strong>{item.code} · {item.customerName}</strong><span>{item.createdByAgent ? `${ar ? "أنشأه وكيل" : "Created by agent"}: ${item.createdByAgent}` : item.customerEmail || item.status}</span></div><div className="compact-row-side"><strong>{formatMoney(item.totalMinor, item.currency, locale)}</strong><StatusLabel status={item.status} locale={locale} /></div></article>)}
+            </div>
+          )}
         </section>
 
         <section className="platform-card content-card" id="projects">
@@ -131,8 +158,8 @@ export function AdminDashboard({ locale }: { locale: Locale }) {
 
         <section className="platform-card content-card" id="alerts">
           <div className="card-heading-row"><div><span className="eyebrow">06 / {ar ? "التنبيهات" : "Alerts"}</span><h2>{text.needsIntervention}</h2></div><span className="mini-count alert-count">{data.totals.urgentAlerts + data.totals.pendingAgentActions}</span></div>
-          <div className="admin-alert-summary"><div><strong>{data.totals.urgentAlerts}</strong><span>{text.severityUrgent}</span></div><div><strong>{data.totals.pendingAgentActions}</strong><span>{text.pendingApprovals}</span></div></div>
-          {data.alerts.length === 0 ? <EmptyAdmin text={text.noAlerts} /> : <div className="compact-list">{data.alerts.map((alert) => <article className="alert-row" key={alert.id}><span className={`severity-dot severity-${alert.severity.toLowerCase()}`} /><div className="compact-row-copy"><strong>{ar ? alert.titleAr : alert.titleEn}</strong><span>{ar ? alert.bodyAr : alert.bodyEn}</span></div><time>{formatDate(alert.createdAt, locale)}</time></article>)}</div>}
+          <div className="admin-alert-summary"><div><strong>{criticalAlerts}</strong><span>{text.severityUrgent}</span></div><div><strong>{data.totals.urgentAlerts - criticalAlerts}</strong><span>{ar ? "مهمة" : "Important"}</span></div><div><strong>{newLeadCount}</strong><span>{ar ? "طلب تواصل" : "Contact requests"}</span></div><div><strong>{data.totals.pendingAgentActions}</strong><span>{text.pendingApprovals}</span></div></div>
+          {data.alerts.length === 0 ? <EmptyAdmin text={text.noAlerts} /> : <div className="compact-list">{data.alerts.map((alert) => <article className="alert-row" key={alert.id}><span className={`severity-dot severity-${alert.severity.toLowerCase()}`} /><div className="compact-row-copy"><strong>{ar ? alert.titleAr : alert.titleEn}</strong><span>{ar ? alert.bodyAr : alert.bodyEn}</span>{alert.category || alert.customerName ? <span className="alert-meta">{[alertCategoryLabel(alert.category, locale), alert.customerName].filter(Boolean).join(" · ")}</span> : null}</div><time>{formatDate(alert.createdAt, locale)}</time></article>)}</div>}
         </section>
 
         <section className="platform-card content-card" id="agents">
@@ -160,6 +187,21 @@ function AdminStat({ label, value, caption, icon, small = false }: { label: stri
   return <article className="stat-card platform-card"><div className="stat-card-top"><span className="stat-icon">{icon}</span><span className={`stat-value${small ? " stat-value-text" : ""}`}>{value}</span></div><h3>{label}</h3><p>{caption}</p></article>;
 }
 function EmptyAdmin({ text }: { text: string }) { return <div className="empty-state"><span className="empty-state-mark">◇</span><p>{text}</p></div>; }
+/** Human label for an alert category, so the owner sees who needs them. */
+function alertCategoryLabel(category: string | undefined, locale: Locale): string {
+  const labels: Record<string, [string, string]> = {
+    HUMAN_REQUEST: ["طلب فريق بشري", "Human handoff"],
+    NEW_LEAD: ["طلب جديد", "New lead"],
+    escalation: ["تصعيد", "Escalation"],
+    support: ["دعم", "Support"],
+    sales: ["مبيعات", "Sales"],
+    billing: ["فوترة", "Billing"],
+    delivery: ["تنفيذ", "Delivery"],
+    integration: ["تكامل", "Integration"],
+  };
+  if (!category) return "";
+  return labels[category]?.[locale === "ar" ? 0 : 1] ?? category.replaceAll("_", " ");
+}
 function StatusLabel({ status, locale }: { status: string; locale: Locale }) {
   const labels: Record<string, [string, string]> = {
     ACTIVE: ["فعّال", "Active"], LEAD: ["عميل محتمل", "Lead"], PAUSED: ["متوقف", "Paused"], ARCHIVED: ["مؤرشف", "Archived"],
