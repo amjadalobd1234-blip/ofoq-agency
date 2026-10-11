@@ -77,6 +77,7 @@ export default function DebugPage() {
   const [serverProbe, setServerProbe] = useState<Record<string, unknown> | null>(null)
   const [cspHeader, setCspHeader] = useState<string>('…')
   const [signupResult, setSignupResult] = useState('')
+  const [escalationReport, setEscalationReport] = useState<string | null>(null)
   const [verdict, setVerdict] = useState<string[]>([])
   const startedRef = useRef(false)
 
@@ -340,6 +341,19 @@ export default function DebugPage() {
     }
   }
 
+  /** يقرأ تقرير التصعيد من الخادم (يعمل بجلسة المستخدم الحالية). */
+  async function runEscalationCheck() {
+    setEscalationReport('جارٍ الفحص…')
+    try {
+      const res = await fetch('/api/debug/escalation', { cache: 'no-store' })
+      const data = await res.json()
+      setEscalationReport(JSON.stringify(data, null, 2))
+    } catch (e) {
+      const classified = classifyFailure(e)
+      setEscalationReport(`FAILED: ${classified.message}`)
+    }
+  }
+
   function copyReport() {
     const lines = [
       `# Ofoq /debug report — ${new Date().toISOString()}`,
@@ -357,6 +371,9 @@ export default function DebugPage() {
       '',
       '## server probe',
       serverProbe ? JSON.stringify(serverProbe, null, 2) : 'n/a',
+      '',
+      '## escalation',
+      escalationReport ?? 'n/a',
       '',
       '## verdict',
       ...verdict,
@@ -441,6 +458,19 @@ export default function DebugPage() {
         Test Signup (POST /auth/v1/signup)
       </button>
       <pre style={{ marginTop: 12, color: '#0f0', whiteSpace: 'pre-wrap', direction: 'ltr', textAlign: 'left' }}>{signupResult}</pre>
+
+      <h2 style={{ marginTop: 24 }}>8) فحص التصعيد (escalation)</h2>
+      <p style={{ color: '#aaa' }}>
+        يجلب تقريرًا من قاعدة البيانات نفسها عن حسابك: دورك، هل لديك سجل عميل (customers)، من يملك المحادثة،
+        هل جدول <code>alerts</code> موجود وعمود <code>customer_id</code> يقبل NULL، وهل دالة{' '}
+        <code>ofoq_client_escalate</code> مثبّتة. هذا هو الفحص الذي يوضّح سبب رسالة «تعذّر تسجيل تنبيه التحويل».
+      </p>
+      <button onClick={runEscalationCheck} style={{ padding: 10, marginTop: 8, cursor: 'pointer' }}>
+        فحص التصعيد الآن (GET /api/debug/escalation)
+      </button>
+      <pre style={{ background: '#111', padding: 12, borderRadius: 6, direction: 'ltr', textAlign: 'left', whiteSpace: 'pre-wrap' }}>
+        {escalationReport ?? '…'}
+      </pre>
 
       <button onClick={copyReport} style={{ padding: 10, marginTop: 16, cursor: 'pointer' }}>
         📋 نسخ التقرير كاملًا (لصقه في وصف المشكلة)

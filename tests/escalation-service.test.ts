@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_OWNER_EMAIL,
+  describeEscalationError,
   escalationRecipients,
   raiseClientEscalation,
   type EscalationRpcClient,
@@ -183,6 +184,79 @@ describe("escalation service", () => {
     expect(outcome.notice).toContain("تعذّر");
   });
 
+  it("logs who was refused, with a hint, when the alert write is denied", async () => {
+    // The failure this whole fix is about: an OWNER with no `customers` row
+    // gets 42501 from the SQL. Without the caller context in the log it is
+    // impossible to tell that apart from a wrong conversation id.
+    const { client } = fakeClient({ error: { code: "42501", message: "Conversation not found" } });
+    const written: string[] = [];
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      written.push(String(chunk));
+      return true;
+    });
+
+    try {
+      const outcome = await raiseClientEscalation({
+        client,
+        conversationId: "conv-owner-1",
+        latestMessage: "أريد أتكلم مع بشري",
+        locale: "ar",
+        context: { userId: "owner-1", role: "OWNER", customerId: null },
+      });
+
+      expect(outcome.escalated).toBe(false);
+
+      const line = written
+        .map((entry) => JSON.parse(entry) as Record<string, unknown>)
+        .find((entry) => entry.message === "[escalation] alert row was not written");
+      expect(line).toMatchObject({
+        userId: "owner-1",
+        role: "OWNER",
+        customerId: null,
+        conversationId: "conv-owner-1",
+        code: "42501",
+        error: "Conversation not found",
+      });
+      expect(String(line?.hint)).toContain("no customers row");
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it("logs the identity the database saw when the alert is written", async () => {
+    const { client } = fakeClient({
+      escalate: { identity: { userId: "owner-1", role: "OWNER", isStaff: true, customerId: null } },
+    });
+    const written: string[] = [];
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      written.push(String(chunk));
+      return true;
+    });
+
+    try {
+      const outcome = await raiseClientEscalation({
+        client,
+        conversationId: "conv-owner-1",
+        latestMessage: "أريد أتكلم مع بشري",
+        locale: "ar",
+        sendOwnerEmail: false,
+        context: { userId: "owner-1", role: "OWNER", customerId: null },
+      });
+
+      expect(outcome.escalated).toBe(true);
+      const line = written
+        .map((entry) => JSON.parse(entry) as Record<string, unknown>)
+        .find((entry) => entry.message === "Client conversation escalated to the human team");
+      expect(line).toMatchObject({
+        userId: "owner-1",
+        role: "OWNER",
+        identity: { role: "OWNER", isStaff: true, customerId: null },
+      });
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
   it("does not email the owner twice for the same open alert", async () => {
     vi.stubEnv("RESEND_API_KEY", "re_test_key");
     const fetchMock = vi.fn().mockResolvedValue(resendOk());
@@ -219,6 +293,20 @@ describe("escalation service", () => {
     expect(outcome.escalated).toBe(false);
     expect(outcome.notice).toBe("");
     expect(calls).toHaveLength(0);
+  });
+
+  it("turns a raw Postgres error into the next thing to look at", () => {
+    expect(describeEscalationError("PGRST202", "Could not find the function public.ofoq_client_escalate")).toContain(
+      "ofoq_client_escalate",
+    );
+    expect(describeEscalationError("42501", "Not allowed to escalate this conversation")).toContain(
+      "no customers row",
+    );
+    expect(describeEscalationError("42703", "column alerts.dedupe_key does not exist")).toContain("dedupe_key");
+    expect(describeEscalationError("23502", "null value in column customer_id")).toContain("nullable");
+    expect(describeEscalationError("42P01", "relation public.alerts does not exist")).toContain("alerts");
+    // Unknown failures still point at the diagnostics endpoint.
+    expect(describeEscalationError("XX000", "something else")).toContain("/api/debug/escalation");
   });
 
   it("collects recipients from OWNER_EMAIL, staff rows and the documented fallback", () => {
