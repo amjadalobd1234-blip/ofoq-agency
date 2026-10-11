@@ -66,6 +66,12 @@ export const ESCALATION_CATEGORY_LABELS: Record<EscalationCategory, { ar: string
 /** "I want a real person" — Arabic (MSA + Iraqi/Gulf), and English. */
 const HUMAN_REQUEST_PATTERNS: RegExp[] = [
   /(بشري|بشرية|إنسان|انسان|شخص حقيقي|شخصية حقيقية|موظف|موظفة|فريق بشري)/,
+  // "أريد بشر" / "ابغى بشر" / "البشر": the bare word "بشر" as a whole word.
+  // \b does not work for Arabic in JavaScript, so the boundaries are explicit.
+  /(^|[\s،,.!?؟])(بشر|البشر)(?=$|[\s،,.!?؟])/,
+  // "أريد التحدث مع شخص", "أبغى أكلم أحد من الفريق", "كلم موظف"
+  /(التحدث|أتحدث|اتحدث|تحدث|أتكلم|اتكلم|أكلم|اكلم|كلم|الكلام)\s+(مع|إلى|الى)\s+(شخص|أحد|احد|موظف|موظفة|مسؤول|الفريق|فريق|أحد من الفريق)/,
+  /(أريد|اريد|ابي|أبي|ابغى|أبغى|ابغي|أبغي|ودي|أودّ|اود)\s+(شخص|أحد|احد|موظف|مسؤول)(?=$|[\s،,.!?؟])/,
   /(أتكلم|اتكلم|أحچي|احچي|أتحدث|اتحدث|أكلم|اكلم|أريد أحد|اريد احد|ابي واحد)/,
   /(كلمني|اتصل بي|اتصلو بي|رقمكم|رقم الهاتف|واتس|واتساب|whatsapp)/,
   /\b(human|real person|someone|somebody|agent|representative|manager|staff)\b/,

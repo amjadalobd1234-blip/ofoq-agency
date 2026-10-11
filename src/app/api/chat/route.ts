@@ -85,6 +85,7 @@ export async function POST(request: Request) {
     trace("2 chat turn NOT saved", { hasData: Boolean(turn), rpc: "ofoq_client_chat_send" });
     return Response.json({ error: "The conversation could not be loaded. Refresh and try again." }, { status: 502 });
   }
+  console.log("[chat] message", { userId: auth.user.id, conversationId: turn.conversationId, message: parsed.data.message });
   trace("2 chat turn saved", {
     conversationId: turn.conversationId,
     historyTurns: turn.messages.length,
@@ -117,10 +118,17 @@ export async function POST(request: Request) {
   // understood enough to be a lead? When yes, an `alerts` row is written, the
   // conversation flips to PENDING, the owner is emailed, and only then is the
   // client told it happened. When the write fails, the client is told that too.
+  console.log("[chat] calling detectEscalation");
   const decision = detectEscalation({
     latestMessage: parsed.data.message,
     history: turn.messages,
     assistantReply: completion.text,
+  });
+  console.log("[chat] escalation:", {
+    escalate: decision.escalate,
+    category: decision.category,
+    severity: decision.severity,
+    signals: decision.signals,
   });
 
   // Escalation must work for every signed-in account, owners included. The
@@ -140,6 +148,7 @@ export async function POST(request: Request) {
     trace("5 caller profile", { role, hasCustomerRecord: Boolean(customer), profileReadOk: Boolean(own?.profile) });
   }
 
+  if (decision.escalate) console.log("[chat] raising escalation");
   const escalation: EscalationOutcome | null = decision.escalate
     ? await raiseClientEscalation({
         client: auth.client,
@@ -157,6 +166,12 @@ export async function POST(request: Request) {
     : null;
 
   if (escalation) {
+    console.log("[chat] escalation result:", {
+      escalated: escalation.escalated,
+      created: escalation.created,
+      alertId: escalation.alertId,
+      error: escalation.error ?? null,
+    });
     trace("6 raiseClientEscalation outcome", {
       escalated: escalation.escalated,
       created: escalation.created,

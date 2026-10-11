@@ -200,6 +200,23 @@ export async function raiseClientEscalation(
     severity: payload.severity,
   };
 
+  const rpcArgs = {
+    p_conversation_id: input.conversationId,
+    p_category: payload.category,
+    p_severity: payload.severity,
+    p_title_ar: payload.title_ar,
+    p_title_en: payload.title_en,
+    // Body text is a summary of the customer's conversation: log its size only.
+    p_body_ar: payload.body_ar ? `[${payload.body_ar.length} chars]` : null,
+    p_body_en: payload.body_en ? `[${payload.body_en.length} chars]` : null,
+    p_reason: decision.reasonEn,
+    p_signals: payload.meta.signals.join(","),
+  };
+  console.log("[escalation] calling RPC", {
+    conversationId: input.conversationId,
+    args: rpcArgs,
+  });
+
   let result: EscalateRpcResult;
   try {
     const response = await input.client.rpc("ofoq_client_escalate", {
