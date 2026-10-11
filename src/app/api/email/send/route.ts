@@ -33,10 +33,10 @@ const bodySchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const auth = await requireSupabaseUser();
+  const auth = await requireSupabaseUser(request);
   if (auth.response) return auth.response;
 
-  const staff = await requireOwnRole(auth.client, auth.user.id, ["OWNER", "PARTNER"]);
+  const staff = await requireOwnRole(auth.client, auth.user.id, ["OWNER", "PARTNER"], { requestId: auth.requestId });
   if (staff.response) return staff.response;
 
   let rawBody: unknown;

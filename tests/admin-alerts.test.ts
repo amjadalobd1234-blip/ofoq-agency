@@ -34,7 +34,12 @@ describe("admin alert centre", () => {
   });
 
   it("keeps admin routes behind both a browser role gate and a database RPC", () => {
-    expect(listRoute).toContain('requireOwnRole(auth.client, auth.user.id, ["OWNER", "PARTNER"])');
+    // The staff gate: the caller's own role must be OWNER/PARTNER, checked from
+    // this request's session before the RPC runs.
+    expect(listRoute).toContain('requireOwnRole(auth.client, auth.user.id, ["OWNER", "PARTNER"], { requestId: auth.requestId })');
+    // …and every refusal path writes one line the host's logs can be filtered on.
+    expect(listRoute).toContain("logAdminAlertGateFailure(");
+    expect(listRoute).toContain("logAdminAlertFailure(");
     expect(listRoute).toContain('rpc("ofoq_admin_alerts"');
     expect(detailRoute).toContain('rpc("ofoq_admin_alert_details"');
     expect(detailRoute).toContain('rpc("ofoq_admin_acknowledge_alert"');

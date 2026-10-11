@@ -55,6 +55,21 @@ export interface RpcFailureContext {
   configProjectRef?: string | null;
   /** Adds the actionable hint to the browser response (staff-only routes). */
   exposeHint?: boolean;
+  /**
+   * What was actually being read when it is not the RPC itself — for example
+   * `public.users (id, name, email, role, status, locale)`.
+   *
+   * The staff routes read the caller's profile row *before* they call any RPC.
+   * A missing column or a stale schema cache on that table produces the same
+   * PostgREST codes as a missing function, so the report must name the table it
+   * really failed on — otherwise «the migration is not installed» points the
+   * reader at the wrong SQL file.
+   */
+  resource?: string;
+  /** Replaces the machine code, e.g. `PROFILE_READ_FAILED` for a table read. */
+  codeOverride?: string;
+  /** Replaces the one sentence the browser receives. */
+  messageOverride?: string;
 }
 
 export interface RpcFailureReport {
@@ -106,13 +121,35 @@ function installedSignaturesSql(rpc: string): string {
 }
 
 /**
- * Classifies one failed RPC call.
+ * Classifies one failed RPC call, then names the resource it failed on.
  *
  * The order matters: a project mismatch explains a PGRST202 better than a
  * missing migration does, and the two are indistinguishable from the error
  * alone — so the session's own project ref is checked first.
  */
 export function diagnoseRpcFailure(error: PostgrestErrorLike, context: RpcFailureContext): RpcFailureReport {
+  return applyContext(classifyRpcFailure(error, context), context);
+}
+
+/**
+ * Rewrites the report when the caller was reading something other than the RPC
+ * (see `RpcFailureContext.resource`). Kept separate so the classification stays
+ * one readable switch over PostgREST's codes.
+ */
+function applyContext(report: RpcFailureReport, context: RpcFailureContext): RpcFailureReport {
+  if (!context.resource && !context.codeOverride && !context.messageOverride) return report;
+  return {
+    ...report,
+    code: context.codeOverride ?? report.code,
+    publicMessage: context.messageOverride ?? report.publicMessage,
+    explanation: context.resource
+      ? report.explanation.replaceAll(`public.${context.rpc}`, context.resource)
+      : report.explanation,
+    hint: context.resource ? `${report.hint} Reading: ${context.resource}.` : report.hint,
+  };
+}
+
+function classifyRpcFailure(error: PostgrestErrorLike, context: RpcFailureContext): RpcFailureReport {
   const code = (error.code ?? "").trim();
   const message = (error.message ?? "").trim();
   const sawProjectMismatch = Boolean(

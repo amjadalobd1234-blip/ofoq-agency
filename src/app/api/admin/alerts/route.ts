@@ -1,3 +1,4 @@
+import { logAdminAlertFailure, logAdminAlertGateFailure } from "@/lib/admin/alert-route-log";
 import { getSupabaseConfig } from "@/lib/supabase/config";
 import { jsonWithSession } from "@/lib/supabase/route-response";
 import { requireOwnRole, requireSupabaseUser, rpcFailureResponse } from "@/lib/supabase/route-auth";
@@ -7,6 +8,8 @@ export const dynamic = "force-dynamic";
 
 const FILTERS: readonly AdminAlertFilter[] = ["OPEN", "ALL", "NEW", "ACKNOWLEDGED", "RESOLVED"];
 
+const ROUTE = "GET /api/admin/alerts";
+
 /**
  * GET /api/admin/alerts?status=OPEN&limit=50&offset=0
  *
@@ -15,13 +18,31 @@ const FILTERS: readonly AdminAlertFilter[] = ["OPEN", "ALL", "NEW", "ACKNOWLEDGE
  *
  * The session comes from this request's cookies, and a token refreshed during
  * the call is written back on the response (see requireSupabaseUser(request)).
+ *
+ * Every failure path writes exactly one `[admin-alerts]` line — including the
+ * profile read before the RPC and a missing session, which used to leave the
+ * page showing a database message with nothing to find in the logs. See
+ * src/lib/admin/alert-route-log.ts.
  */
 export async function GET(request: Request) {
   const auth = await requireSupabaseUser(request);
-  if (auth.response) return auth.response;
+  if (auth.response) {
+    logAdminAlertGateFailure({ request, route: ROUTE, action: "list", reason: "auth_required" });
+    return auth.response;
+  }
 
-  const access = await requireOwnRole(auth.client, auth.user.id, ["OWNER", "PARTNER"]);
-  if (access.response) return access.response;
+  const access = await requireOwnRole(auth.client, auth.user.id, ["OWNER", "PARTNER"], { requestId: auth.requestId });
+  if (access.response) {
+    logAdminAlertGateFailure({
+      request,
+      route: ROUTE,
+      action: "list",
+      auth: { userId: auth.user.id, userEmail: auth.user.email ?? null, requestId: auth.requestId, session: auth.session },
+      reason: access.reason,
+      error: access.error ?? null,
+    });
+    return access.response;
+  }
 
   const url = new URL(request.url);
   const requestedFilter = url.searchParams.get("status")?.toUpperCase();
@@ -30,6 +51,7 @@ export async function GET(request: Request) {
     : "ALL";
   const limit = clampInt(url.searchParams.get("limit"), 50, 1, 100);
   const offset = clampInt(url.searchParams.get("offset"), 0, 0, 10_000);
+  const rpcArgs = { p_status: filter, p_limit: String(limit), p_offset: String(offset) };
 
   const { data, error } = await auth.client.rpc("ofoq_admin_alerts", {
     p_status: filter,
@@ -38,27 +60,25 @@ export async function GET(request: Request) {
   });
   if (error) {
     const config = getSupabaseConfig();
-    // eslint-disable-next-line no-console
-    console.error("[api/admin/alerts] ofoq_admin_alerts RPC failed:", {
+    // One line, same shape as every other admin-alerts failure.
+    logAdminAlertFailure({
+      request,
+      route: ROUTE,
+      action: "list",
+      reason: "rpc",
       requestId: auth.requestId,
       userId: auth.user.id,
-      userEmail: auth.user.email,
+      userEmail: auth.user.email ?? null,
       userRole: access.profile.role,
-      supabaseHost: config ? hostOf(config.url) : null,
-      filter,
-      limit,
-      offset,
       session: auth.session,
-      rpcError: {
-        code: error.code ?? null,
-        message: error.message ?? null,
-        details: error.details ?? null,
-        hint: error.hint ?? null,
-      },
+      rpc: "ofoq_admin_alerts",
+      rpcArgs,
+      rpcError: error,
+      note: `supabaseHost=${config ? hostOf(config.url) : "unconfigured"}`,
     });
     return rpcFailureResponse(error, {
       rpc: "ofoq_admin_alerts",
-      args: { p_status: filter, p_limit: String(limit), p_offset: String(offset) },
+      args: rpcArgs,
       sessionProjectRef: auth.session?.projectRef.fromSession ?? null,
       configProjectRef: auth.session?.projectRef.fromConfigUrl ?? null,
       exposeHint: true,

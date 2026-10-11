@@ -1,5 +1,6 @@
 import { providerStatuses } from "@/lib/ai/providers";
 import { emailStatus } from "@/lib/email/email-service";
+import { jsonWithSession } from "@/lib/supabase/route-response";
 import { requireSupabaseUser, requireOwnRole, rpcFailureResponse } from "@/lib/supabase/route-auth";
 
 export const dynamic = "force-dynamic";
@@ -43,11 +44,11 @@ interface RecentUsageRow {
 
 const MISSING_SCHEMA_CODES = ["PGRST202", "PGRST204", "42P01", "42883"];
 
-export async function GET() {
-  const auth = await requireSupabaseUser();
+export async function GET(request: Request) {
+  const auth = await requireSupabaseUser(request);
   if (auth.response) return auth.response;
 
-  const owner = await requireOwnRole(auth.client, auth.user.id, ["OWNER"]);
+  const owner = await requireOwnRole(auth.client, auth.user.id, ["OWNER"], { requestId: auth.requestId });
   if (owner.response) return owner.response;
 
   const providers = providerStatuses().map((provider) => ({
@@ -62,7 +63,8 @@ export async function GET() {
 
   if (error) {
     if (MISSING_SCHEMA_CODES.includes(error.code ?? "")) {
-      return Response.json(
+      return jsonWithSession(
+        auth,
         {
           data: {
             generatedAt: new Date().toISOString(),
@@ -74,7 +76,7 @@ export async function GET() {
           notice:
             "Apply db/migrations/supabase/0002_ai_usage.sql in the Supabase SQL Editor to record AI usage.",
         },
-        { status: 200, headers: { "Cache-Control": "no-store" } },
+        { status: 200 },
       );
     }
     return rpcFailureResponse(error);
@@ -98,16 +100,13 @@ export async function GET() {
     };
   });
 
-  return Response.json(
-    {
-      data: {
-        generatedAt: payload.generatedAt ?? new Date().toISOString(),
-        usageAvailable: true,
-        providers: merged,
-        recent: (payload.recent ?? []).slice(0, 10),
-        email: emailStatus(),
-      },
+  return jsonWithSession(auth, {
+    data: {
+      generatedAt: payload.generatedAt ?? new Date().toISOString(),
+      usageAvailable: true,
+      providers: merged,
+      recent: (payload.recent ?? []).slice(0, 10),
+      email: emailStatus(),
     },
-    { headers: { "Cache-Control": "no-store, max-age=0" } },
-  );
+  });
 }

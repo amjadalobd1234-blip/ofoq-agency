@@ -1,9 +1,10 @@
+import { jsonWithSession } from "@/lib/supabase/route-response";
 import { requireSupabaseUser, rpcFailureResponse } from "@/lib/supabase/route-auth";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  const auth = await requireSupabaseUser();
+export async function GET(request: Request) {
+  const auth = await requireSupabaseUser(request);
   if (auth.response) {
     // eslint-disable-next-line no-console
     console.error("[api/admin/dashboard] no authenticated Supabase user for this request (session/cookie issue, not RLS).");
@@ -25,5 +26,5 @@ export async function GET() {
     });
     return rpcFailureResponse(error);
   }
-  return Response.json({ data }, { headers: { "Cache-Control": "no-store, max-age=0" } });
+  return jsonWithSession(auth, { data });
 }

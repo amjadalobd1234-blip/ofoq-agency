@@ -1,3 +1,4 @@
+import { jsonWithSession } from "@/lib/supabase/route-response";
 import { requireSupabaseUser, rpcFailureResponse } from "@/lib/supabase/route-auth";
 
 export const dynamic = "force-dynamic";
@@ -10,9 +11,14 @@ export const dynamic = "force-dynamic";
  * `authenticated` are selectable. No service-role key is involved.
  *
  * 401 → no valid session. Client pages send the visitor to /login.
+ *
+ * The session is read from THIS request, and a token the SDK refreshes during
+ * the call is written back on the response (requireSupabaseUser(request) +
+ * jsonWithSession) — otherwise the page that asked «who am I?» would keep a
+ * token the server has already replaced.
  */
-export async function GET() {
-  const auth = await requireSupabaseUser();
+export async function GET(request: Request) {
+  const auth = await requireSupabaseUser(request);
   if (auth.response) return auth.response;
 
   const { data, error } = await auth.client
@@ -30,11 +36,12 @@ export async function GET() {
 
   if (!data) {
     // Auth user exists but has no platform profile (e.g. created before the trigger was installed).
-    return Response.json(
+    return jsonWithSession(
+      auth,
       { error: "Your session is not active. Sign in again or contact the agency." },
-      { status: 403, headers: { "Cache-Control": "no-store" } },
+      { status: 403 },
     );
   }
 
-  return Response.json({ data }, { headers: { "Cache-Control": "no-store, max-age=0" } });
+  return jsonWithSession(auth, { data });
 }
