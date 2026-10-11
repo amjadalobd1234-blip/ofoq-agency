@@ -42,6 +42,18 @@ const NEW_OFFER_STATUSES = ["DRAFT", "SENT"];
 const ACTIVE_PROJECT_STATUSES = ["PLANNING", "IN_PROGRESS", "IN_REVIEW", "REVISIONS"];
 /** Escalation categories raised by the assistant when a human is needed. */
 const LEAD_CATEGORIES = ["NEW_LEAD", "HUMAN_REQUEST"];
+type AdminTab = "overview" | "clients" | "requests" | "projects" | "campaigns" | "reports" | "alerts" | "agents";
+
+const ADMIN_TABS: Array<{ id: AdminTab; ar: string; en: string }> = [
+  { id: "overview", ar: "نظرة عامة", en: "Overview" },
+  { id: "clients", ar: "العملاء", en: "Clients" },
+  { id: "requests", ar: "الطلبات", en: "Requests" },
+  { id: "projects", ar: "المشاريع", en: "Projects" },
+  { id: "campaigns", ar: "الحملات", en: "Campaigns" },
+  { id: "reports", ar: "التقارير", en: "Reports" },
+  { id: "alerts", ar: "التنبيهات", en: "Alerts" },
+  { id: "agents", ar: "موافقات الوكلاء", en: "Agent approvals" },
+];
 
 export function AdminDashboard({ locale }: { locale: Locale }) {
   const ar = locale === "ar";
@@ -49,6 +61,7 @@ export function AdminDashboard({ locale }: { locale: Locale }) {
   const [data, setData] = useState<AdminData | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<AdminTab>("overview");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -115,59 +128,65 @@ export function AdminDashboard({ locale }: { locale: Locale }) {
         <AdminStat label={ar ? "التنبيهات العاجلة" : "Urgent alerts"} value={data.totals.urgentAlerts} caption={`${criticalAlerts} ${ar ? "عاجلة الآن" : "critical now"} · ${newLeadCount} ${ar ? "طلب تواصل جديد" : "new contact requests"}`} icon="!" />
       </section>
 
-      <nav className="admin-quick-links" aria-label={ar ? "انتقال سريع" : "Quick links"}>
-        <a href="#clients">{ar ? "العملاء" : "Clients"}<span>↗</span></a>
-        <a href="#requests">{ar ? "الطلبات الجديدة" : "New requests"}<span>↗</span></a>
-        <a href="#projects">{ar ? "المشاريع" : "Projects"}<span>↗</span></a>
-        <a href="#campaigns">{ar ? "الحملات" : "Campaigns"}<span>↗</span></a>
-        <a href="#reports">{ar ? "التقارير" : "Reports"}<span>↗</span></a>
-        <a href="#alerts">{ar ? "التنبيهات" : "Alerts"}<span>↗</span></a>
-        <a href="#agents">{ar ? "موافقات الوكلاء" : "Agent approvals"}<span>↗</span></a>
+      <nav className="admin-quick-links" role="tablist" aria-label={ar ? "تبويبات لوحة الإدارة" : "Admin dashboard tabs"}>
+        {ADMIN_TABS.map((tab) => (
+          <button
+            type="button"
+            role="tab"
+            key={tab.id}
+            aria-selected={activeTab === tab.id}
+            className={activeTab === tab.id ? "is-active" : ""}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            {ar ? tab.ar : tab.en}
+          </button>
+        ))}
       </nav>
 
-      <div className="dashboard-columns admin-columns">
-        <section className="platform-card content-card" id="clients">
+      <div className="dashboard-columns admin-columns" role="tabpanel">
+        {(activeTab === "overview" || activeTab === "clients") && <section className="platform-card content-card" id="clients">
           <div className="card-heading-row"><div><span className="eyebrow">01 / {ar ? "العملاء" : "Clients"}</span><h2>{ar ? "أحدث العملاء" : "Recent clients"}</h2></div><span className="mini-count">{data.totals.customers}</span></div>
           {data.clients.length === 0 ? <EmptyAdmin text={ar ? "لا يوجد عملاء مسجلون بعد. لن تظهر بيانات تجريبية هنا." : "No clients are registered yet. This space does not use demo records."} /> : <div className="table-list">{data.clients.map((client) => <article className="table-row" key={client.id}><div className="avatar-token">{client.name?.slice(0, 1) || "أ"}</div><div className="table-row-main"><strong>{client.name}</strong><span>{client.companyName || client.email || (ar ? "عميل" : "Client")}</span></div><StatusLabel status={client.status} locale={locale} /></article>)}</div>}
-        </section>
+        </section>}
 
-        <section className="platform-card content-card" id="requests">
+        {(activeTab === "overview" || activeTab === "requests") && <section className="platform-card content-card" id="requests">
           <div className="card-heading-row"><div><span className="eyebrow">02 / {ar ? "الطلبات" : "Requests"}</span><h2>{ar ? "الطلبات الجديدة" : "New requests"}</h2><p className="card-subtitle">{ar ? "طلبات تواصل رفعها مساعد أفق + عروض بانتظار المتابعة." : "Contact requests raised by the Ofoq assistant, plus offers awaiting follow-up."}</p></div><span className="mini-count">{data.totals.newRequests + newLeadCount}</span></div>
           {leadRequests.length === 0 && newOffers.length === 0 ? <EmptyAdmin text={ar ? "لا توجد طلبات جديدة: لا تنبيهات تواصل من المساعد ولا عروض بحالة مسودة أو مُرسلة." : "No new requests: no assistant handoff alerts and no offers in draft or sent status."} /> : (
             <div className="compact-list">
-              {leadRequests.map((lead) => <article className="alert-row" key={lead.id}><span className={`severity-dot severity-${lead.severity.toLowerCase()}`} /><div className="compact-row-copy"><strong>{lead.customerName || (ar ? lead.titleAr : lead.titleEn)}</strong><span>{ar ? lead.bodyAr : lead.bodyEn}</span><span className="alert-meta">{lead.category === "HUMAN_REQUEST" ? (ar ? "طلب فريق بشري" : "Human handoff") : (ar ? "طلب جديد" : "New lead")}{lead.customerEmail ? ` · ${lead.customerEmail}` : ""} · {formatDate(lead.createdAt, locale)}</span></div><div className="compact-row-side"><span className="status-pill status-new">{ar ? "بانتظار الفريق" : "Awaiting team"}</span><time>{lead.conversationId ? `#${lead.conversationId.slice(0, 8)}` : ""}</time></div></article>)}
+              {leadRequests.map((lead) => <a className="alert-row alert-row-link" href={`/admin/alerts/${encodeURIComponent(lead.id)}`} key={lead.id}><span className={`severity-dot severity-${lead.severity.toLowerCase()}`} /><div className="compact-row-copy"><strong>{lead.customerName || (ar ? lead.titleAr : lead.titleEn)}</strong><span>{ar ? lead.bodyAr : lead.bodyEn}</span><span className="alert-meta">{lead.category === "HUMAN_REQUEST" ? (ar ? "طلب فريق بشري" : "Human handoff") : (ar ? "طلب جديد" : "New lead")}{lead.customerEmail ? ` · ${lead.customerEmail}` : ""} · {formatDate(lead.createdAt, locale)}</span></div><div className="compact-row-side"><span className="status-pill status-new">{ar ? "بانتظار الفريق" : "Awaiting team"}</span><time>{lead.conversationId ? `#${lead.conversationId.slice(0, 8)}` : ""}</time></div><span className="alert-row-open" aria-hidden="true">←</span></a>)}
               {newOffers.map((item) => <article className="compact-row" key={item.id}><div className="compact-row-copy"><strong>{item.code} · {item.customerName}</strong><span>{item.createdByAgent ? `${ar ? "أنشأه وكيل" : "Created by agent"}: ${item.createdByAgent}` : item.customerEmail || item.status}</span></div><div className="compact-row-side"><strong>{formatMoney(item.totalMinor, item.currency, locale)}</strong><StatusLabel status={item.status} locale={locale} /></div></article>)}
             </div>
           )}
-        </section>
+        </section>}
 
-        <section className="platform-card content-card" id="projects">
+        {(activeTab === "overview" || activeTab === "projects") && <section className="platform-card content-card" id="projects">
           <div className="card-heading-row"><div><span className="eyebrow">03 / {ar ? "المشاريع" : "Projects"}</span><h2>{ar ? "المشاريع النشطة" : "Active projects"}</h2></div><span className="mini-count">{data.totals.activeProjects}</span></div>
           {activeProjects.length === 0 ? <EmptyAdmin text={ar ? "لا توجد مشاريع نشطة حاليًا." : "There are no active projects right now."} /> : <div className="compact-list">{activeProjects.map((project) => <article className="compact-row" key={project.id}><div className="compact-row-copy"><strong>{project.code} · {project.title}</strong><span>{project.customerName}{project.dueDate ? ` · ${ar ? "الاستحقاق" : "Due"} ${formatDate(project.dueDate, locale)}` : ""}</span><div className="progress-track" aria-hidden="true"><span style={{ width: `${clampPercent(project.progress)}%` }} /></div></div><div className="compact-row-side"><strong>{clampPercent(project.progress)}%</strong><StatusLabel status={project.status} locale={locale} /></div></article>)}</div>}
-        </section>
+        </section>}
 
-        <section className="platform-card content-card" id="campaigns">
+        {(activeTab === "overview" || activeTab === "campaigns") && <section className="platform-card content-card" id="campaigns">
           <div className="card-heading-row"><div><span className="eyebrow">04 / {ar ? "الحملات" : "Campaigns"}</span><h2>{ar ? "الحملات الإعلانية" : "Advertising campaigns"}</h2></div><span className="integration-status">{ar ? "Google Ads غير مربوط" : "Google Ads not connected"}</span></div>
           {data.campaigns.length === 0 ? <EmptyAdmin text={ar ? "لا توجد حملات مسجلة. لا يتم جلب أو اختلاق بيانات إعلانية." : "No campaigns are recorded. Ad data is never fabricated."} /> : <div className="compact-list">{data.campaigns.map((campaign) => <article className="compact-row" key={campaign.id}><div className="compact-row-copy"><strong>{campaign.name}</strong><span>{campaign.customerName} · {campaign.platform.replaceAll("_", " ")}</span></div><div className="compact-row-side"><strong>{formatMoney(campaign.spentMinor, campaign.currency, locale)}</strong><StatusLabel status={campaign.status} locale={locale} /></div></article>)}</div>}
-        </section>
+        </section>}
 
-        <section className="platform-card content-card" id="reports">
+        {(activeTab === "overview" || activeTab === "reports") && <section className="platform-card content-card" id="reports">
           <div className="card-heading-row"><div><span className="eyebrow">05 / {ar ? "التقارير" : "Reports"}</span><h2>{ar ? "التقارير الأخيرة" : "Recent reports"}</h2></div><span className="mini-count">{data.totals.reports30d}</span></div>
           {data.reports.length === 0 ? <EmptyAdmin text={ar ? "لا توجد تقارير محفوظة بعد." : "There are no saved reports yet."} /> : <div className="compact-list">{data.reports.map((report) => <article className="compact-row" key={report.id}><div className="compact-row-copy"><strong>{report.title}</strong><span>{report.customerName} · {report.type.replaceAll("_", " ")}</span></div><div className="compact-row-side"><StatusLabel status={report.status} locale={locale} /><time>{formatDate(report.createdAt, locale)}</time></div></article>)}</div>}
-        </section>
+        </section>}
 
-        <section className="platform-card content-card" id="alerts">
-          <div className="card-heading-row"><div><span className="eyebrow">06 / {ar ? "التنبيهات" : "Alerts"}</span><h2>{text.needsIntervention}</h2></div><span className="mini-count alert-count">{data.totals.urgentAlerts + data.totals.pendingAgentActions}</span></div>
+        {(activeTab === "overview" || activeTab === "alerts") && <section className="platform-card content-card" id="alerts">
+          <div className="card-heading-row"><div><span className="eyebrow">06 / {ar ? "التنبيهات" : "Alerts"}</span><h2>{text.needsIntervention}</h2></div><div className="card-heading-actions"><a className="subtle-link" href="/admin/alerts">{ar ? "كل التنبيهات" : "All alerts"}</a><span className="mini-count alert-count">{data.totals.urgentAlerts + data.totals.pendingAgentActions}</span></div></div>
           <div className="admin-alert-summary"><div><strong>{criticalAlerts}</strong><span>{text.severityUrgent}</span></div><div><strong>{data.totals.urgentAlerts - criticalAlerts}</strong><span>{ar ? "مهمة" : "Important"}</span></div><div><strong>{newLeadCount}</strong><span>{ar ? "طلب تواصل" : "Contact requests"}</span></div><div><strong>{data.totals.pendingAgentActions}</strong><span>{text.pendingApprovals}</span></div></div>
-          {data.alerts.length === 0 ? <EmptyAdmin text={text.noAlerts} /> : <div className="compact-list">{data.alerts.map((alert) => <article className="alert-row" key={alert.id}><span className={`severity-dot severity-${alert.severity.toLowerCase()}`} /><div className="compact-row-copy"><strong>{ar ? alert.titleAr : alert.titleEn}</strong><span>{ar ? alert.bodyAr : alert.bodyEn}</span>{alert.category || alert.customerName ? <span className="alert-meta">{[alertCategoryLabel(alert.category, locale), alert.customerName].filter(Boolean).join(" · ")}</span> : null}</div><time>{formatDate(alert.createdAt, locale)}</time></article>)}</div>}
-        </section>
+          {data.alerts.length === 0 ? <EmptyAdmin text={text.noAlerts} /> : <div className="compact-list">{data.alerts.map((alert) => <a className="alert-row alert-row-link" href={`/admin/alerts/${encodeURIComponent(alert.id)}`} key={alert.id}><span className={`severity-dot severity-${alert.severity.toLowerCase()}`} /><div className="compact-row-copy"><strong>{ar ? alert.titleAr : alert.titleEn}</strong><span>{ar ? alert.bodyAr : alert.bodyEn}</span>{alert.category || alert.customerName ? <span className="alert-meta">{[alertCategoryLabel(alert.category, locale), alert.customerName].filter(Boolean).join(" · ")}</span> : null}</div><time>{formatDate(alert.createdAt, locale)}</time><span className="alert-row-open" aria-hidden="true">←</span></a>)}</div>}
+        </section>}
 
-        <section className="platform-card content-card" id="agents">
+        {(activeTab === "overview" || activeTab === "agents") && <section className="platform-card content-card" id="agents">
           <div className="card-heading-row"><div><span className="eyebrow">07 / {ar ? "الوكلاء" : "Agents"}</span><h2>{ar ? "إجراءات الوكلاء المعلّقة" : "Pending agent actions"}</h2></div><span className="mini-count">{data.totals.pendingAgentActions}</span></div>
           {pendingActions.length === 0 ? <EmptyAdmin text={ar ? "لا توجد إجراءات تنتظر موافقتك." : "No agent actions are waiting for your approval."} /> : <div className="compact-list">{pendingActions.map((action) => <article className="compact-row" key={action.id}><div className="compact-row-copy"><strong>{action.agentKey} · {action.action}</strong><span>{action.summary}{action.reason ? ` — ${action.reason}` : ""}</span></div><span className={`status-pill risk-${action.riskLevel.toLowerCase()}`}>{ar ? "تحتاج موافقتك" : "Needs approval"}</span></article>)}</div>}
-        </section>
+        </section>}
       </div>
 
+      {activeTab === "overview" && <>
       <section className="platform-card finance-panel">
         <div><span className="eyebrow">08 / {ar ? "ملخص داخلي" : "INTERNAL SUMMARY"}</span><h2>{ar ? "المدفوعات والتكاليف" : "Payments and costs"}</h2><p>{ar ? "هذه البيانات داخلية ولا تظهر في بوابة العميل." : "This information is internal and is not shown in the client portal."}</p></div>
         <div className="finance-values"><div><span>{text.revenue} · 30d</span><strong>{collected}</strong></div><div><span>{text.expenses} · 30d</span><strong>{internalCosts}</strong></div></div>
@@ -179,6 +198,7 @@ export function AdminDashboard({ locale }: { locale: Locale }) {
         <IntegrationCard label={ar ? "الدفع الإلكتروني" : "Online payments"} status={data.integrations.payments.status} locale={locale} detail={ar ? "الفواتير اليدوية فقط؛ لا تتم معالجة بطاقات." : "Manual invoices only; no card processing."} />
       </section>
       <p className="admin-generated-at">{ar ? "آخر تحديث" : "Updated"}: {formatDate(data.generatedAt, locale)}</p>
+      </>}
     </div>
   );
 }
