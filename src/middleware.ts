@@ -26,10 +26,16 @@ import { getSupabaseAuthStorageKey, getSupabaseConfig } from "@/lib/supabase/con
  * -----------------------
  * Every surface that reads the session server-side is listed in `config.matcher`
  * below — the pages AND the API routes they call (`/api/admin/:path*`,
- * `/api/dashboard`, `/api/me`). An API route that is not matched still receives
- * the browser's cookies, but nothing refreshes them: an expired access token
- * then fails at `auth.getUser()` and the staff page reports an auth error even
- * though the same user just used a page successfully.
+ * `/api/dashboard`, `/api/me`, `/api/debug/:path*`, `/api/email/:path*`). An API
+ * route that is not matched still receives the browser's cookies, but nothing
+ * refreshes them: an expired access token then fails at `auth.getUser()` and the
+ * staff page reports an auth error even though the same user just used a page
+ * successfully.
+ *
+ * `tests/admin-alert-diagnostics.test.ts` («covers every session-reading API
+ * route in the middleware matcher») walks src/app/api, finds every route that
+ * calls `requireSupabaseUser(`, and fails when one of them is missing here — so
+ * a new endpoint cannot quietly lose the refresh.
  *
  * Deliberately NOT matched:
  * - `/api/supabase-proxy/:path*` — it is the same-origin tunnel every browser
@@ -83,5 +89,9 @@ export const config = {
     "/api/admin/:path*",
     "/api/dashboard",
     "/api/me",
+    // Staff-only diagnostics and the staff e-mail action: both read the session
+    // from cookies and had no refresh before this entry.
+    "/api/debug/:path*",
+    "/api/email/:path*",
   ],
 };

@@ -35,8 +35,10 @@ interface SentPayload {
   userMessage: { id: string; sender: string; body: string; language: string; createdAt: string };
 }
 
-export async function GET() {
-  const auth = await requireSupabaseUser();
+export async function GET(request: Request) {
+  // `/api/chat` is deliberately outside the middleware matcher, so the session
+  // is read from this request here (never from an ambient cookie store).
+  const auth = await requireSupabaseUser(request);
   if (auth.response) return auth.response;
 
   const { data, error } = await auth.client.rpc("ofoq_client_chat_bootstrap");
@@ -57,7 +59,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const auth = await requireSupabaseUser();
+  const auth = await requireSupabaseUser(request);
   if (auth.response) return auth.response;
 
   let rawBody: unknown;

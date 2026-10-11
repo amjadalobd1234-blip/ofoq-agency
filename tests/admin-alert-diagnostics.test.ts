@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ALERT_RPC_EXPECTATIONS, allAlertRpcsExposed, verifyAlertRpc, verifyAlertRpcs } from "../src/lib/admin/alert-rpc-contract";
 import { parseRestSurface } from "../src/lib/supabase/postgrest-introspection";
@@ -19,10 +19,18 @@ import type { SupabasePublicConfig } from "../src/lib/supabase/config";
  * is asserted too.
  */
 
+/**
+ * One spy for the whole file. `vi.spyOn(console, "error")` twice would install a
+ * second mock on top of the first, and every call recorded by the first would
+ * silently move to the second — so both suites share this one.
+ */
+const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
 const rootDir = process.cwd();
 const middlewareSource = fs.readFileSync(path.join(rootDir, "src", "middleware.ts"), "utf8");
 const detailRouteSource = fs.readFileSync(path.join(rootDir, "src", "app", "api", "admin", "alerts", "[id]", "route.ts"), "utf8");
 const listRouteSource = fs.readFileSync(path.join(rootDir, "src", "app", "api", "admin", "alerts", "route.ts"), "utf8");
+const alertRouteLogSource = fs.readFileSync(path.join(rootDir, "src", "lib", "admin", "alert-route-log.ts"), "utf8");
 const alertMigration = fs.readFileSync(path.join(rootDir, "db", "migrations", "supabase", "0007_admin_alerts.sql"), "utf8");
 const setupBundle = fs.readFileSync(path.join(rootDir, "docs", "setup", "supabase-setup.sql"), "utf8");
 
@@ -235,17 +243,71 @@ describe("wiring guards", () => {
     expect(matcher).not.toContain("supabase-proxy");
   });
 
+  it("covers every session-reading API route in the middleware matcher", () => {
+    // The session is only refreshed for the paths listed in config.matcher. A
+    // route that reads a session but is not matched still receives cookies — it
+    // just never gets a token refreshed, which is the «route-auth session
+    // rejected / refreshOnly: true» line this whole investigation started from.
+    const matcherEntries = [...middlewareSource.matchAll(/"(\/api\/[^"]*)"/g)].map((match) => match[1]);
+    const covers = (routePath: string): boolean =>
+      matcherEntries.some((entry) => {
+        if (entry.endsWith("/:path*")) {
+          const prefix = entry.slice(0, -"/:path*".length);
+          return routePath === prefix || routePath.startsWith(`${prefix}/`);
+        }
+        return entry === routePath;
+      });
+
+    /** Documented exceptions: they accept work before a session exists. */
+    const exempt = new Set(["/api/chat", "/api/ai/chat"]);
+
+    const routes: string[] = [];
+    const walk = (directory: string): void => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const full = path.join(directory, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name === "route.ts") routes.push(full);
+      }
+    };
+    walk(path.join(rootDir, "src", "app", "api"));
+
+    const uncovered = routes
+      .filter((file) => fs.readFileSync(file, "utf8").includes("requireSupabaseUser("))
+      .map((file) => {
+        const segments = path
+          .relative(path.join(rootDir, "src", "app"), path.dirname(file))
+          .split(path.sep)
+          .filter((segment) => !segment.startsWith("(") || !segment.endsWith(")"))
+          .map((segment) => (segment.startsWith("[") ? segment.replaceAll("[", "").replaceAll("]", "") : segment));
+        return `/${segments.join("/")}`;
+      })
+      .filter((routePath) => !exempt.has(routePath) && !covers(routePath));
+
+    expect(uncovered, "add these to src/middleware.ts config.matcher — or explain the exception above").toEqual([]);
+    // The two staff endpoints this investigation is about are matched, too.
+    expect(covers("/api/admin/alerts")).toBe(true);
+    expect(covers("/api/admin/alerts/28cd84e5-1111-2222-3333-444455556666")).toBe(true);
+    expect(covers("/api/me")).toBe(true);
+  });
+
   it("hands the request to the auth helper and logs the session on failure", () => {
     expect(detailRouteSource).toContain("requireSupabaseUser(request)");
     expect(listRouteSource).toContain("requireSupabaseUser(request)");
     for (const source of [detailRouteSource, listRouteSource]) {
-      expect(source).toContain("session: auth.session");
-      expect(source).toContain("rpcError: {");
-      expect(source).toContain("details:");
+      // One log line per failure, in the same shape, from the same helper.
+      expect(source).toContain("logAdminAlertGateFailure(");
+      expect(source).toContain("logAdminAlertFailure(");
       expect(source).toContain("exposeHint: true");
     }
     expect(detailRouteSource).toContain("alertId: context.alertId");
-    expect(detailRouteSource).toContain("userId: auth.user.id");
+    // The four fields the log line must always carry (see alert-route-log.ts).
+    for (const field of ["hasSession", "userId", "cookieCount", "rpcError", "cookieNames", "projectRef"]) {
+      expect(alertRouteLogSource).toContain(field);
+    }
+    expect(alertRouteLogSource).toContain('console.error("[admin-alerts]"');
+    // Session facts come from THIS request, never from an ambient cookie store.
+    expect(alertRouteLogSource).toContain("describeRequestSession(");
+    expect(alertRouteLogSource).toContain("safeDescribe(entry.request)");
   });
 
   it("keeps the TypeScript contract identical to the SQL argument names", () => {
@@ -282,7 +344,6 @@ describe("wiring guards", () => {
 
 describe("GET /api/admin/alerts/[id]", () => {
   const rpcMock = vi.fn();
-  const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
   beforeEach(() => {
     rpcMock.mockReset();
@@ -374,5 +435,162 @@ describe("GET /api/admin/alerts/[id]", () => {
       session: { projectRef: { fromSession: string; fromConfigUrl: string } };
     };
     expect(logged.session.projectRef).toEqual({ fromSession: "toknrefrefrefref", fromConfigUrl: "configrefrefrefref", mismatch: true });
+  });
+});
+
+/**
+ * The failure paths the owner actually reads in the host's function logs.
+ *
+ * Three different problems all end with the same sentence in the page:
+ * «Supabase portal migration is not installed yet». These tests pin what the
+ * log says for each of them, so the sentence can always be traced to a cause:
+ *
+ *   - no session reached the route        → [admin-alerts] hasSession: false
+ *   - public.users could not be read      → [admin-alerts] reason: "profile"
+ *                                            (+ PROFILE_READ_FAILED, naming
+ *                                             the table, NOT the alert RPC)
+ *   - the RPC itself is not exposed       → [admin-alerts] reason: "rpc"
+ */
+describe("[admin-alerts] failure log", () => {
+  const rpcMock = vi.fn();
+  let profileResult: { data: unknown; error: unknown } = { data: null, error: null };
+
+  beforeEach(() => {
+    // A configured deployment, so the log helper reads the cookie the same way
+    // the running app does (expected cookie name, claims, project refs).
+    process.env.NEXT_PUBLIC_SUPABASE_URL = CONFIG.url;
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = CONFIG.anonKey;
+    rpcMock.mockReset();
+    errorSpy.mockClear();
+    profileResult = { data: null, error: null };
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  });
+
+  /** A client whose profile read returns whatever the test set. */
+  function fakeClient() {
+    const chain = {
+      select: () => chain,
+      eq: () => chain,
+      maybeSingle: () => Promise.resolve(profileResult),
+    };
+    return { rpc: rpcMock, from: () => chain };
+  }
+
+  async function importListRoute(options: { session: boolean }) {
+    vi.doMock("@/lib/supabase/route-auth", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../src/lib/supabase/route-auth")>();
+      if (!options.session) {
+        return {
+          ...actual,
+          requireSupabaseUser: async () =>
+            ({ response: Response.json({ error: "Authentication required.", code: "AUTH_REQUIRED" }, { status: 401 }) }),
+        };
+      }
+      // Everything else stays real — including requireOwnRole().
+      return {
+        ...actual,
+        requireSupabaseUser: async (request?: Request) => ({
+          client: fakeClient(),
+          user: { id: "user-1", email: "owner@example.test" },
+          requestId: "test-request-id",
+          session: describeSession(request ?? null, CONFIG, COOKIE_NAME),
+          finalize: (response: Response) => response,
+        }),
+      };
+    });
+    const route = await import("../src/app/api/admin/alerts/route");
+    const cookie = sessionCookieValue({ access_token: fakeAccessToken({ ref: "configrefrefrefref", sub: "user-1" }) });
+    return { GET: route.GET, request: requestWithCookies([{ name: COOKIE_NAME, value: cookie }], "http://localhost/api/admin/alerts?status=OPEN") };
+  }
+
+  function alertLog() {
+    const call = errorSpy.mock.calls.find((entry) => entry[0] === "[admin-alerts]");
+    expect(call, "every failure must write an [admin-alerts] line").toBeTruthy();
+    return call?.[1] as Record<string, unknown>;
+  }
+
+  it("logs hasSession: false when no session reached the route", async () => {
+    const { GET, request } = await importListRoute({ session: false });
+    const response = await GET(request);
+
+    expect(response.status).toBe(401);
+    const logged = alertLog();
+    expect(logged).toMatchObject({ route: "GET /api/admin/alerts", action: "list", reason: "auth_required", hasSession: false, userId: null, rpcError: null });
+    expect(logged.cookieCount).toBe(1);
+    // The cookie was there and named its user — the token itself was refused,
+    // which is a different problem from «the browser sent no cookies».
+    expect(logged.sessionUserId).toBe("user-1");
+    expect(logged.hasExpectedAuthCookie).toBe(true);
+    expect(String(logged.note)).toContain("[route-auth]");
+  });
+
+  it("names public.users — not the alert RPC — when the staff profile cannot be read", async () => {
+    profileResult = {
+      data: null,
+      error: {
+        code: "PGRST204",
+        message: "Could not find the 'locale' column of 'users' in the schema cache",
+        details: null,
+        hint: null,
+      },
+    };
+    const { GET, request } = await importListRoute({ session: true });
+    const response = await GET(request);
+    const payload = await response.json();
+
+    // The page keeps a truthful message («something from the migration is
+    // missing») but the machine code says which part, and the hint says where.
+    expect(response.status).toBe(503);
+    expect(payload.code).toBe("PROFILE_READ_FAILED");
+    expect(payload.error).toContain("public.users");
+    expect(payload.hint).toContain("schema cache");
+
+    // …and the log line cannot be mistaken for a missing alert RPC.
+    const logged = alertLog();
+    expect(logged).toMatchObject({ reason: "profile", hasSession: true, userId: "user-1", rpc: "readOwnProfile" });
+    expect(logged.cookieCount).toBe(1);
+    expect(logged.rpcError).toMatchObject({ code: "PGRST204" });
+    expect(String(logged.note)).toContain("not about ofoq_admin_alerts");
+
+    // The classification line names the real resource and the real columns.
+    const classified = errorSpy.mock.calls.find((entry) => String(entry[0]).includes("readOwnProfile failed"));
+    const report = classified?.[1] as { explanation: string; nextStep: string; kind: string };
+    expect(report.kind).toBe("stale_schema_cache");
+    expect(report.explanation).toContain("public.users");
+    expect(report.nextStep).toContain("public.users (id, name, email, role, status, locale)");
+
+    // Nothing ever reached the alert RPC.
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("logs the RPC call, its arguments and the full PostgREST error when the list fails", async () => {
+    profileResult = { data: { id: "user-1", name: "أمجد", email: "owner@example.test", role: "OWNER", status: "ACTIVE", locale: "ar" }, error: null };
+    rpcMock.mockResolvedValue({
+      data: null,
+      error: { code: "PGRST202", message: "Could not find the function public.ofoq_admin_alerts(p_limit, p_offset, p_status) in the schema cache", details: null, hint: null },
+    });
+    const { GET, request } = await importListRoute({ session: true });
+    const response = await GET(request);
+
+    expect(response.status).toBe(503);
+    const logged = alertLog();
+    expect(logged).toMatchObject({
+      reason: "rpc",
+      hasSession: true,
+      userId: "user-1",
+      userRole: "OWNER",
+      cookieCount: 1,
+      rpc: "ofoq_admin_alerts",
+      rpcArgs: { p_status: "OPEN", p_limit: "50", p_offset: "0" },
+    });
+    expect(logged.rpcError).toMatchObject({ code: "PGRST202" });
+    // The cookie names and the project comparison travel with the same line.
+    expect(logged.cookieNames).toEqual([COOKIE_NAME]);
+    expect(logged.projectRef).toEqual({ fromSession: "configrefrefrefref", fromConfigUrl: "configrefrefrefref", mismatch: false });
   });
 });

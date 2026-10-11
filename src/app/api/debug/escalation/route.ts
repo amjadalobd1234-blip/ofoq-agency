@@ -29,7 +29,7 @@ export const dynamic = "force-dynamic";
  * A structured version of the same report is also shown in section 8 of /debug.
  */
 export async function GET(request: Request): Promise<Response> {
-  const auth = await requireSupabaseUser();
+  const auth = await requireSupabaseUser(request);
   if (auth.response) return auth.response;
 
   const url = new URL(request.url);

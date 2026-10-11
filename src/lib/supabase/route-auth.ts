@@ -79,6 +79,8 @@ export async function requireSupabaseUser(
     const ambient = request ? null : await ambientCookieNames();
     // eslint-disable-next-line no-console
     console.error("[route-auth] session rejected", {
+      // Same first question every route log answers: did a session arrive?
+      hasSession: false,
       requestId,
       route: request ? `${request.method ?? "GET"} ${safePath(request)}` : null,
       ...report,
@@ -197,6 +199,9 @@ function inactiveSessionResponse(): Response {
   );
 }
 
+/** Why a staff gate refused the request. `read_failed` is a database problem. */
+export type ProfileFailureReason = "no_profile" | "inactive" | "forbidden" | "read_failed";
+
 /**
  * Route guard for staff-only or owner-only endpoints.
  *
@@ -204,24 +209,54 @@ function inactiveSessionResponse(): Response {
  * account is ACTIVE; otherwise a ready-to-return Response. The database still
  * re-checks every staff RPC, so this is an early, friendlier gate — not the only
  * line of defence.
+ *
+ * A failed *read* (a missing column, a stale schema cache, a partial migration
+ * on `public.users`) is reported separately from a failed *authorisation*: it
+ * comes back with `reason: "read_failed"` and the raw PostgREST `error`, so the
+ * calling route can log it as «the profile table, not the alert RPC».
  */
 export async function requireOwnRole(
   client: ServerClient,
   userId: string,
   allowed: readonly SupabaseProfile["role"][],
-): Promise<{ profile: SupabaseProfile; response?: never } | { profile?: never; response: Response }> {
+  context?: { requestId?: string },
+): Promise<
+  | { profile: SupabaseProfile; response?: never; reason?: never; error?: never }
+  | { profile?: never; response: Response; reason: ProfileFailureReason; error?: PostgrestErrorLike }
+> {
   const { profile, error } = await fetchOwnProfile(client, userId);
   if (!profile) {
-    if (error?.code === "NO_PROFILE") return { response: inactiveSessionResponse() };
-    return { response: rpcFailureResponse(error ?? {}, { rpc: "fetchOwnProfile" }) };
+    if (error?.code === "NO_PROFILE") {
+      return { response: inactiveSessionResponse(), reason: "no_profile" };
+    }
+    return {
+      response: rpcFailureResponse(error ?? {}, {
+        rpc: "readOwnProfile",
+        // The table and the exact columns the app selected. A missing column is
+        // the difference between «apply the migration» and «your schema cache
+        // is stale», and PostgREST's own message names it.
+        args: { table: "public.users", select: PROFILE_COLUMNS.replaceAll(", ", ",") },
+        resource: `public.users (${PROFILE_COLUMNS})`,
+        codeOverride: "PROFILE_READ_FAILED",
+        messageOverride:
+          "Your staff profile could not be read from the database (public.users). The portal SQL is applied only partially, or the Data API's schema cache is stale.",
+        exposeHint: true,
+        requestId: context?.requestId,
+      }),
+      reason: "read_failed",
+      error: error ?? {},
+    };
   }
-  if (profile.status !== "ACTIVE") return { response: inactiveSessionResponse() };
+  if (profile.status !== "ACTIVE") {
+    return { response: inactiveSessionResponse(), reason: "inactive" };
+  }
   if (!allowed.includes(profile.role)) {
     return {
       response: Response.json(
         { error: "You do not have permission for this action.", code: "ROLE_FORBIDDEN" },
         { status: 403, headers: { "Cache-Control": "no-store" } },
       ),
+      reason: "forbidden",
     };
   }
   return { profile };

@@ -1,5 +1,6 @@
 import { AI_PROVIDER_IDS } from "@/lib/ai/providers";
 import { liveModelReport } from "@/lib/ai/provider-catalog";
+import { jsonWithSession } from "@/lib/supabase/route-response";
 import { requireSupabaseUser, requireOwnRole } from "@/lib/supabase/route-auth";
 
 export const dynamic = "force-dynamic";
@@ -21,10 +22,10 @@ export const runtime = "nodejs";
  * echoed back.
  */
 export async function GET(request: Request) {
-  const auth = await requireSupabaseUser();
+  const auth = await requireSupabaseUser(request);
   if (auth.response) return auth.response;
 
-  const owner = await requireOwnRole(auth.client, auth.user.id, ["OWNER"]);
+  const owner = await requireOwnRole(auth.client, auth.user.id, ["OWNER"], { requestId: auth.requestId });
   if (owner.response) return owner.response;
 
   const requested = new URL(request.url).searchParams.get("provider")?.trim() ?? "";
@@ -37,8 +38,5 @@ export async function GET(request: Request) {
 
   const providers = await liveModelReport(requested ? { providerId: requested } : {});
 
-  return Response.json(
-    { data: { checkedAt: new Date().toISOString(), providers } },
-    { headers: { "Cache-Control": "no-store" } },
-  );
+  return jsonWithSession(auth, { data: { checkedAt: new Date().toISOString(), providers } });
 }

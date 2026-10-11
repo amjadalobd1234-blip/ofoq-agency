@@ -25,7 +25,7 @@
  * the handful of non-secret claims above leave this module. A token is never
  * printed, not even truncated.
  */
-import type { SupabasePublicConfig } from "./config";
+import { getSupabaseAuthStorageKey, getSupabaseConfig, type SupabasePublicConfig } from "./config";
 
 /** The non-secret parts of a Supabase access token this module cares about. */
 export interface JwtClaims {
@@ -302,4 +302,17 @@ export function describeSession(
     },
     notes,
   };
+}
+
+/**
+ * The session report for one incoming Request, read with THIS deployment's own
+ * configuration (the same `getSupabaseConfig()` every route uses).
+ *
+ * Route handlers call this when they are about to log a failure: it is the only
+ * way a log line can say «hasSession: false, cookieCount: 0» — a session that
+ * never arrived — instead of leaving that question to a second deploy.
+ */
+export function describeRequestSession(request: Request): SessionReport {
+  const config = getSupabaseConfig();
+  return describeSession(request, config, config ? getSupabaseAuthStorageKey(config) : null);
 }

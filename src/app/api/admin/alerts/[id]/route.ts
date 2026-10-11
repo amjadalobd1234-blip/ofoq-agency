@@ -1,3 +1,4 @@
+import { logAdminAlertFailure, logAdminAlertGateFailure } from "@/lib/admin/alert-route-log";
 import { getSupabaseConfig } from "@/lib/supabase/config";
 import { jsonWithSession } from "@/lib/supabase/route-response";
 import {
@@ -5,10 +6,13 @@ import {
   requireSupabaseUser,
   rpcFailureResponse,
   type PostgrestErrorLike,
+  type ProfileFailureReason,
   type SupabaseProfile,
   type SupabaseSessionAuth,
 } from "@/lib/supabase/route-auth";
 export const dynamic = "force-dynamic";
+
+const ROUTE = "GET /api/admin/alerts/[id]";
 
 type RouteContext = { params: Promise<{ id: string }> };
 type AlertAction = "acknowledge" | "resolve" | "reply";
@@ -18,12 +22,13 @@ type AlertAction = "acknowledge" | "resolve" | "reply";
  *
  * The session is read from THIS request (see `requireSupabaseUser(request)`), so
  * a token the SDK refreshes mid-request is written back onto the response
- * instead of being lost. Every failure is logged with the cookie names, the
- * session's project reference and the full PostgREST error — see
- * `failAlertRequest()` and docs/ADMIN-ALERTS-AR.md.
+ * instead of being lost. Every failure — a missing session, the profile read
+ * and the RPC itself — writes one `[admin-alerts]` line with `hasSession`,
+ * `userId`, `cookieCount` and `rpcError`. See src/lib/admin/alert-route-log.ts
+ * and docs/ADMIN-ALERTS-AR.md.
  */
 export async function GET(request: Request, context: RouteContext) {
-  const access = await requireStaff(request);
+  const access = await requireStaff(request, "details");
   if (access.response) return access.response;
 
   const alertId = await getAlertId(context);
@@ -38,6 +43,7 @@ export async function GET(request: Request, context: RouteContext) {
       rpc: "ofoq_admin_alert_details",
       alertId,
       args: { p_alert_id: "<alert id>" },
+      request,
     });
   }
 
@@ -51,8 +57,9 @@ export async function GET(request: Request, context: RouteContext) {
  * narrowly scoped SECURITY DEFINER RPC that records the responsible staff user.
  */
 export async function POST(request: Request, context: RouteContext) {
-  const access = await requireStaff(request);
-  if (access.response) return access.response;
+  const gate = await requireStaff(request, "action");
+  if (gate.response) return gate.response;
+  const access = gate;
 
   const alertId = await getAlertId(context);
   if (!alertId) return invalidRequestResponse();
@@ -91,7 +98,15 @@ export async function POST(request: Request, context: RouteContext) {
   }
 
   if (error) {
-    return failAlertRequest(error, { auth: access.auth, profile: access.profile, action: payload.action, rpc, alertId, args });
+    return failAlertRequest(error, {
+      auth: access.auth,
+      profile: access.profile,
+      action: payload.action,
+      rpc,
+      alertId,
+      args,
+      request,
+    });
   }
   return jsonWithSession(access.auth, { data });
 }
@@ -99,16 +114,38 @@ export async function POST(request: Request, context: RouteContext) {
 interface StaffAccess {
   auth: SupabaseSessionAuth;
   profile: SupabaseProfile;
+  response?: never;
 }
 
+/**
+ * The staff gate in front of every handler of this route.
+ *
+ * Both refusal paths are logged here, in the same `[admin-alerts]` shape the RPC
+ * failures use, so the host's function logs always explain what the page shows:
+ * a missing session, a profile row that could not be read, a non-staff account.
+ */
 async function requireStaff(
   request: Request,
-): Promise<(StaffAccess & { response?: never }) | { auth?: never; profile?: never; response: Response }> {
+  action: string,
+): Promise<StaffAccess | { auth?: never; profile?: never; response: Response }> {
   const auth = await requireSupabaseUser(request);
-  if (auth.response) return { response: auth.response };
+  if (auth.response) {
+    logAdminAlertGateFailure({ request, route: ROUTE, action, reason: "auth_required" });
+    return { response: auth.response };
+  }
 
-  const role = await requireOwnRole(auth.client, auth.user.id, ["OWNER", "PARTNER"]);
-  if (role.response) return { response: role.response };
+  const role = await requireOwnRole(auth.client, auth.user.id, ["OWNER", "PARTNER"], { requestId: auth.requestId });
+  if (role.response) {
+    logAdminAlertGateFailure({
+      request,
+      route: ROUTE,
+      action,
+      auth: { userId: auth.user.id, userEmail: auth.user.email ?? null, requestId: auth.requestId, session: auth.session },
+      reason: role.reason as ProfileFailureReason,
+      error: role.error ?? null,
+    });
+    return { response: role.response };
+  }
 
   return { auth, profile: role.profile };
 }
@@ -165,10 +202,28 @@ function failAlertRequest(
     alertId: string;
     /** Argument NAMES with placeholders — never the message text of a note or reply. */
     args: Record<string, string>;
+    /** The incoming request, so the log can report the session it carried. */
+    request: Request;
   },
 ): Response {
   const { auth, profile } = context;
   const config = getSupabaseConfig();
+  // The one line to grep for — same shape as every other admin-alerts failure.
+  logAdminAlertFailure({
+    request: context.request,
+    route: ROUTE,
+    action: context.action,
+    reason: "rpc",
+    requestId: auth.requestId,
+    userId: auth.user.id,
+    userEmail: auth.user.email ?? null,
+    userRole: profile.role,
+    session: auth.session,
+    rpc: context.rpc,
+    rpcArgs: { ...context.args, alertId: context.alertId },
+    rpcError: error,
+    note: `supabaseHost=${config ? safeHost(config.url) : "unconfigured"}`,
+  });
   // eslint-disable-next-line no-console
   console.error(`[api/admin/alerts] ${context.action} RPC failed`, {
     requestId: auth.requestId,
