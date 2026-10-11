@@ -6,7 +6,7 @@ import { anyProviderConfigured, firstConfiguredProvider, providerLabel } from "@
 import { aiUsageRpcArgs, safeUsageSink } from "@/lib/ai/usage";
 import { detectEscalation } from "@/lib/agents/escalation-agent";
 import { raiseClientEscalation, type EscalationOutcome } from "@/lib/services/escalation.service";
-import { requireSupabaseUser, rpcFailureResponse } from "@/lib/supabase/route-auth";
+import { fetchOwnProfile, requireSupabaseUser, rpcFailureResponse } from "@/lib/supabase/route-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -107,6 +107,14 @@ export async function POST(request: Request) {
     history: turn.messages,
     assistantReply: completion.text,
   });
+
+  // Escalation must work for every signed-in account, owners included. The
+  // role and the client record travel with the call so a refusal can be read
+  // straight off the server log (an OWNER with no `customers` row used to be
+  // indistinguishable from a wrong conversation id).
+  const own = decision.escalate ? await fetchOwnProfile(auth.client, auth.user.id) : null;
+  const role = own?.profile?.role ?? null;
+
   const escalation: EscalationOutcome | null = decision.escalate
     ? await raiseClientEscalation({
         client: auth.client,
@@ -115,6 +123,11 @@ export async function POST(request: Request) {
         history: turn.messages,
         locale,
         decision,
+        context: {
+          userId: auth.user.id,
+          role,
+          customerId: (customer as { id?: string } | null)?.id ?? null,
+        },
       })
     : null;
 

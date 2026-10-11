@@ -75,11 +75,24 @@ function fakeSupabaseClient() {
   };
 }
 
+/** The platform profile of the signed-in account, as /api/chat reads it. */
+let ownProfile: { id: string; role: string; status: string } | null = {
+  id: "user-1",
+  role: "CLIENT",
+  status: "ACTIVE",
+};
+
 vi.mock("@/lib/supabase/route-auth", () => ({
   requireSupabaseUser: () =>
     Promise.resolve({ client: fakeSupabaseClient(), user: { id: "user-1", email: "client@example.test" } }),
   rpcFailureResponse: (error: { message?: string }) =>
     Response.json({ error: error?.message ?? "rpc failed" }, { status: 502 }),
+  fetchOwnProfile: () =>
+    Promise.resolve(
+      ownProfile
+        ? { profile: { ...ownProfile, name: "نور", email: "client@example.test", locale: "ar" } }
+        : { error: { code: "NO_PROFILE", message: "No platform profile for this account." } },
+    ),
 }));
 
 const { POST } = await import("../src/app/api/chat/route");
@@ -190,6 +203,45 @@ describe("POST /api/chat escalation", () => {
     expect(payload.data.reply.body).toContain("تعذّر تسجيل تنبيه التحويل");
     // No email goes out for an escalation that was never recorded.
     expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("logs who was refused when the alert could not be written — owner included", async () => {
+    // An OWNER without a `customers` row was the silent failure this fix is
+    // about: the assistant answered, the handoff did not. The log has to name
+    // the account, its role and the missing client record.
+    ownProfile = { id: "user-1", role: "OWNER", status: "ACTIVE" };
+    escalateResponse = { data: null, error: { code: "42501", message: "Conversation not found" } };
+
+    const written: string[] = [];
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      written.push(String(chunk));
+      return true;
+    });
+
+    try {
+      const response = await POST(postRequest("أريد أتكلم مع بشري"));
+      const payload = (await response.json()) as { data: { escalated: boolean; reply: { body: string } } };
+
+      expect(payload.data.escalated).toBe(false);
+      expect(payload.data.reply.body).toContain("تعذّر تسجيل تنبيه التحويل");
+
+      const line = written.map((entry) => JSON.parse(entry) as Record<string, unknown>).find((entry) => entry.message === "[escalation] alert row was not written");
+      expect(line).toBeTruthy();
+      expect(line).toMatchObject({
+        userId: "user-1",
+        role: "OWNER",
+        customerId: "customer-1",
+        conversationId: "conv-1",
+        category: "HUMAN_REQUEST",
+        severity: "URGENT",
+        code: "42501",
+        error: "Conversation not found",
+      });
+      expect(String(line?.hint)).toContain("no customers row");
+    } finally {
+      stderr.mockRestore();
+      ownProfile = { id: "user-1", role: "CLIENT", status: "ACTIVE" };
+    }
   });
 
   it("escalates a NEW_LEAD once the need is understood, without a human request", async () => {

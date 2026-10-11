@@ -24,6 +24,13 @@
   - `ofoq_escalation_email_result`: يسجّل هل وصل بريد المالك فعلًا (SENT/FAILED) حتى لا يبقى الفشل صامتًا.
   - منع التكرار: تنبيه واحد لكل محادثة/تصنيف/يوم عبر `dedupe_key`، والتنبيه المُغلق يُعاد فتحه عند طلب العميل مرة أخرى.
   - `ofoq_admin_dashboard` أصبح يعيد `leadRequests` و`totals.newLeads` و`totals.criticalAlerts`، ويحسب `urgentAlerts` من `URGENT` و`IMPORTANT` معًا.
+- `db/migrations/supabase/0004_escalation_owner_support.sql`: التصعيد يعمل لأي حساب مسجّل (المالك والشريك مشمولان).
+  - `ofoq_ensure_customer_profile` (مضاف إلى `0001`): ينشئ صفّ `customers` الناقص للحساب عند أول محادثة، فلا يبقى حساب بلا صفّ عميل.
+  - ترميم لمرة واحدة لكل الحسابات التي لا تملك صفّ عميل.
+  - `ofoq_client_escalate`: تُحلّ المحادثة أولًا، وأي `OWNER`/`PARTNER` فعّال يصعّد أي محادثة ويب، و`alerts.customer_id` قد يكون `NULL` مع بقاء التنبيه، ورسائل الرفض مفصّلة، والنتيجة تحمل كتلة `identity`.
+  - سياسة إدخال `alerts_insert_authenticated` (RLS) مضيّقة إلى صفوف التصعيد فقط، مع بقاء صلاحية الجدول مسحوبة.
+  - `ofoq_escalation_diagnostics`: RPC لتشخيص فشل التصعيد، مربوط بـ `GET /api/debug/escalation` وقسم 8 في `/debug`.
+  - التفاصيل وخطوات الاختبار في `docs/ESCALATION-AR.md`.
 - عزل سجلات العميل عبر التحقق من `auth.uid()` داخل كل RPC. لا تُعاد التكاليف الداخلية أو الملاحظات الداخلية إلى بوابة العميل.
 
 > لا يتصل هذا الإعداد بقاعدة البيانات من Arena. نفّذ SQL يدويًا في لوحة Supabase فقط، ثم يطلب التطبيق البيانات عبر HTTPS وRLS.

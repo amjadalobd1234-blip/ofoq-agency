@@ -60,6 +60,80 @@ $function$;
 REVOKE ALL ON FUNCTION public.ofoq_is_staff() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.ofoq_is_staff() TO authenticated;
 
+-- Every account that can sign in must be able to talk to the assistant —
+-- whatever its role. The `ofoq_create_auth_profile` trigger below creates the
+-- `customers` row together with the Auth user, but accounts that existed before
+-- the trigger (or that were promoted to OWNER/PARTNER later) have a `users` row
+-- and no `customers` row. This lazily creates the missing client record, using
+-- the same convention as the trigger (customers.id = users.id).
+--
+-- It never creates accounts and never touches another user's record.
+CREATE OR REPLACE FUNCTION public.ofoq_ensure_customer_profile()
+RETURNS text
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $function$
+DECLARE
+  v_user_id text := (SELECT auth.uid())::text;
+  v_now text := to_char(timezone('utc', now()), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+  v_customer_id text;
+  v_email text;
+  v_name text;
+  v_locale text;
+BEGIN
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'Authentication required' USING ERRCODE = '28000';
+  END IF;
+
+  -- The normal path: the account already has a client record.
+  SELECT c.id INTO v_customer_id
+  FROM public.customers AS c
+  WHERE c.user_id = v_user_id
+  ORDER BY c.created_at ASC
+  LIMIT 1;
+
+  IF v_customer_id IS NOT NULL THEN
+    RETURN v_customer_id;
+  END IF;
+
+  SELECT u.email, u.name, u.locale
+  INTO v_email, v_name, v_locale
+  FROM public.users AS u
+  WHERE u.id = v_user_id AND u.status = 'ACTIVE';
+
+  IF v_email IS NULL THEN
+    RAISE EXCEPTION 'Authentication required or account inactive' USING ERRCODE = '28000';
+  END IF;
+
+  -- customers.id = users.id, exactly like the signup trigger does. A
+  -- conflicting id that belongs to somebody else is left untouched by the
+  -- WHERE clause, so this can never re-point a real client record.
+  INSERT INTO public.customers
+    (id, user_id, contact_name, email, locale, currency, source, status, is_demo, created_at, updated_at)
+  VALUES
+    (v_user_id, v_user_id,
+     coalesce(nullif(trim(v_name), ''), nullif(split_part(lower(v_email), '@', 1), ''), 'Ofoq client'),
+     lower(v_email), coalesce(v_locale, 'ar'), 'USD', 'WEB', 'LEAD', 0, v_now, v_now)
+  ON CONFLICT (id) DO UPDATE
+    SET user_id = EXCLUDED.user_id,
+        email = coalesce(public.customers.email, EXCLUDED.email),
+        updated_at = EXCLUDED.updated_at
+    WHERE public.customers.user_id IS NULL OR public.customers.user_id = EXCLUDED.user_id;
+
+  SELECT c.id INTO v_customer_id
+  FROM public.customers AS c
+  WHERE c.user_id = v_user_id
+  ORDER BY c.created_at ASC
+  LIMIT 1;
+
+  RETURN v_customer_id;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.ofoq_ensure_customer_profile() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.ofoq_ensure_customer_profile() TO authenticated;
+
 -- Create the platform profile/customer record in the same transaction as Auth
 -- signup. A new browser user can never choose their own role.
 CREATE OR REPLACE FUNCTION public.ofoq_create_auth_profile()
@@ -497,16 +571,20 @@ BEGIN
     RAISE EXCEPTION 'Authentication required or account inactive' USING ERRCODE = '28000';
   END IF;
 
-  SELECT c.id, c.contact_name, c.locale
-  INTO v_customer_id, v_customer_name, v_locale
-  FROM public.customers AS c
-  WHERE c.user_id = v_user_id
-  ORDER BY c.created_at ASC
-  LIMIT 1;
+  -- An owner or partner has no `customers` row until they chat for the first
+  -- time; create it here instead of refusing the conversation, because
+  -- «Client profile is not ready» used to lock owners out of their own
+  -- assistant (and left every later escalation impossible).
+  v_customer_id := public.ofoq_ensure_customer_profile();
 
   IF v_customer_id IS NULL THEN
-    RAISE EXCEPTION 'Client profile is not ready';
+    RAISE EXCEPTION 'Client profile is not ready' USING ERRCODE = '28000';
   END IF;
+
+  SELECT c.contact_name, c.locale
+  INTO v_customer_name, v_locale
+  FROM public.customers AS c
+  WHERE c.id = v_customer_id;
 
   SELECT c.id INTO v_conversation_id
   FROM public.conversations AS c
