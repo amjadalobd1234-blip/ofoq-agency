@@ -2411,3 +2411,12 @@ button:disabled {
   .admin-alert-list-title-row .status-pill { font-size: 8px; }
   .admin-conversation-message { max-width: 98%; }
 }
+
+/* /admin error boundary — surfaces the real error instead of the generic
+   "Application error: a client-side exception has occurred" document. */
+.admin-error-card { display: grid; gap: 16px; padding: 18px; }
+.admin-error-card .setup-notice strong { word-break: break-word; }
+.admin-error-digest { margin: 0; color: #9a968c; font-size: 10px; }
+.admin-error-digest code { border-radius: 3px; background: rgba(255, 255, 255, 0.06); padding: 2px 6px; color: var(--gold-light); font-size: 10px; }
+.admin-error-hint { max-width: 720px; margin: 0; color: #8e8a81; font-size: 11px; line-height: 1.9; }
+.admin-error-actions { display: flex; flex-wrap: wrap; gap: 10px; }

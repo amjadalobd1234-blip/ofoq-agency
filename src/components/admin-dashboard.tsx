@@ -2,39 +2,9 @@
 
 import { useEffect, useState } from "react";
 
+import { normalizeAdminDashboard, type AdminDashboardData } from "@/lib/admin/payload";
 import type { Locale } from "@/lib/domain/types";
 import { dictionaries } from "@/lib/i18n/dictionaries";
-
-/**
- * Shape returned by the `ofoq_admin_dashboard` RPC through `/api/admin/dashboard`.
- *
- * The RPC returns the 8 most recent rows of each list, whatever their status.
- * Status filtering (new offers, active projects, pending approvals) happens here,
- * and the header counts come from `totals`, which the database computes over
- * every row.
- */
-interface AdminData {
-  generatedAt: string;
-  totals: {
-    customers: number; newCustomers7d: number; activeProjects: number; overdueProjects: number;
-    newRequests: number; activeCampaigns: number; reports30d: number; pendingAgentActions: number; urgentAlerts: number;
-    /** Alerts that must be handled now (severity = URGENT). Optional: added with the escalation RPCs. */
-    criticalAlerts?: number;
-    /** Open HUMAN_REQUEST / NEW_LEAD alerts raised by the assistant. */
-    newLeads?: number;
-  };
-  clients: Array<{ id: string; name: string; companyName?: string | null; email?: string | null; country?: string | null; status: string; createdAt: string }>;
-  requests: Array<{ id: string; code: string; status: string; currency: string; totalMinor: number | string; createdByAgent?: string | null; createdAt: string; customerName: string; customerEmail?: string | null }>;
-  projects: Array<{ id: string; code: string; title: string; status: string; progress: number; dueDate?: string | null; customerName: string; amountTotalMinor: number | string; internalCostMinor: number | string; createdAt?: string }>;
-  campaigns: Array<{ id: string; name: string; platform: string; status: string; currency: string; totalBudgetMinor: number | string; monthlyBudgetMinor: number | string; spentMinor: number | string; syncStatus: string; customerName: string; updatedAt: string }>;
-  reports: Array<{ id: string; title: string; type: string; status: string; customerName: string; createdAt: string }>;
-  alerts: Array<{ id: string; severity: string; category?: string; titleAr: string; titleEn: string; bodyAr?: string | null; bodyEn?: string | null; status: string; createdAt: string; customerName?: string | null }>;
-  /** Open client escalations (HUMAN_REQUEST / NEW_LEAD) — the "new requests" the assistant produced. */
-  leadRequests?: Array<{ id: string; severity: string; category: string; titleAr: string; titleEn: string; bodyAr?: string | null; bodyEn?: string | null; conversationId?: string | null; createdAt: string; customerName?: string | null; customerEmail?: string | null }>;
-  agentActions: Array<{ id: string; agentKey: string; action: string; summary: string; reason?: string | null; riskLevel: string; requiresApproval: number | boolean; createdAt: string }>;
-  financials: { collected30d: Array<{ currency: string; totalMinor: number | string }>; internalCost30d: Array<{ currency: string; totalMinor: number | string }> };
-  integrations: { googleAds: { status: string }; whatsapp: { status: string }; payments: { status: string } };
-}
 
 /** Offer statuses that still need a response from the agency. */
 const NEW_OFFER_STATUSES = ["DRAFT", "SENT"];
@@ -58,7 +28,7 @@ const ADMIN_TABS: Array<{ id: AdminTab; ar: string; en: string }> = [
 export function AdminDashboard({ locale }: { locale: Locale }) {
   const ar = locale === "ar";
   const text = dictionaries[locale].dashboard;
-  const [data, setData] = useState<AdminData | null>(null);
+  const [data, setData] = useState<AdminDashboardData | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<AdminTab>("overview");
@@ -77,7 +47,7 @@ export function AdminDashboard({ locale }: { locale: Locale }) {
           });
           throw new Error(payload.error || "Unable to load admin data.");
         }
-        setData(payload.data as AdminData);
+        setData(normalizeAdminDashboard(payload.data));
       })
       .catch((reason: unknown) => {
         // eslint-disable-next-line no-console
@@ -96,23 +66,17 @@ export function AdminDashboard({ locale }: { locale: Locale }) {
   const activeProjects = data.projects.filter((project) => ACTIVE_PROJECT_STATUSES.includes(project.status));
   const pendingActions = data.agentActions.filter((action) => Number(action.requiresApproval) === 1);
   // Client escalations the assistant raised: a person was requested, or the
-  // client's need is understood. Fallback filter keeps the section working if
-  // the RPC returns the plain alerts list only.
-  const leadRequests = (data.leadRequests?.length
+  // client's need is understood. The fallback filter keeps the section working
+  // if the deployed RPC returns the plain alerts list only.
+  const leadRequests = data.leadRequests.length
     ? data.leadRequests
-    : data.alerts.filter((alert) => LEAD_CATEGORIES.includes(alert.category ?? ""))
-  ).map((lead) => ({
-    ...lead,
-    customerName: lead.customerName ?? null,
-    customerEmail: "customerEmail" in lead ? lead.customerEmail ?? null : null,
-    conversationId: "conversationId" in lead ? lead.conversationId ?? null : null,
-  }));
+    : data.alerts.filter((alert) => LEAD_CATEGORIES.includes(alert.category));
   const criticalAlerts = data.totals.criticalAlerts ?? data.totals.urgentAlerts;
   const newLeadCount = data.totals.newLeads ?? leadRequests.length;
 
-  const collected = formatBuckets(data.financials?.collected30d ?? [], locale);
-  const internalCosts = formatBuckets(data.financials?.internalCost30d ?? [], locale);
-  const hasRevenue = (data.financials?.collected30d ?? []).length > 0;
+  const collected = formatBuckets(data.financials.collected30d, locale);
+  const internalCosts = formatBuckets(data.financials.internalCost30d, locale);
+  const hasRevenue = data.financials.collected30d.length > 0;
 
   return (
     <div className="dashboard-content admin-dashboard">
