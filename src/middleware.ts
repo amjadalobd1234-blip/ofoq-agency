@@ -21,6 +21,22 @@ import { getSupabaseAuthStorageKey, getSupabaseConfig } from "@/lib/supabase/con
  * the incoming request (so this request sees the refreshed session) and the
  * outgoing response (so the browser keeps it), then call `getUser()` once to
  * trigger the refresh.
+ *
+ * Which paths are matched
+ * -----------------------
+ * Every surface that reads the session server-side is listed in `config.matcher`
+ * below — the pages AND the API routes they call (`/api/admin/:path*`,
+ * `/api/dashboard`, `/api/me`). An API route that is not matched still receives
+ * the browser's cookies, but nothing refreshes them: an expired access token
+ * then fails at `auth.getUser()` and the staff page reports an auth error even
+ * though the same user just used a page successfully.
+ *
+ * Deliberately NOT matched:
+ * - `/api/supabase-proxy/:path*` — it is the same-origin tunnel every browser
+ *   auth/REST call goes through. Refreshing here would add a Supabase round-trip
+ *   to every proxied request (and a refresh loop risk if Supabase is unreachable).
+ * - `/api/ai/chat` and `/api/chat` — both accept work before a session exists;
+ *   each route still calls `requireSupabaseUser()` itself.
  */
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });
@@ -53,5 +69,19 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/login", "/register", "/forgot-password", "/reset-password", "/dashboard/:path*", "/chat", "/admin/:path*"],
+  matcher: [
+    // Pages that render a signed-in surface.
+    "/login",
+    "/register",
+    "/forgot-password",
+    "/reset-password",
+    "/dashboard/:path*",
+    "/chat",
+    "/admin/:path*",
+    // API routes those pages call: without an entry here their request can
+    // carry an access token that expired since the last page navigation.
+    "/api/admin/:path*",
+    "/api/dashboard",
+    "/api/me",
+  ],
 };

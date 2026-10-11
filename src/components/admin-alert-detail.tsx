@@ -10,6 +10,10 @@ export function AdminAlertDetail({ alertId, locale }: { alertId: string; locale:
   const ar = locale === "ar";
   const [data, setData] = useState<AdminAlertDetailsResponse | null>(null);
   const [error, setError] = useState("");
+  // Machine code, actionable hint and request id from the API. They turn
+  // "the migration is not installed" into something the owner can act on, and
+  // let a log line be found by its id.
+  const [errorInfo, setErrorInfo] = useState<ApiErrorInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState<"acknowledge" | "resolve" | "reply" | null>(null);
   const [notice, setNotice] = useState("");
@@ -19,13 +23,20 @@ export function AdminAlertDetail({ alertId, locale }: { alertId: string; locale:
   const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError("");
+    setErrorInfo(null);
     try {
       const response = await fetch(`/api/admin/alerts/${encodeURIComponent(alertId)}`, { cache: "no-store", signal });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.error || "Unable to load alert.");
+      if (!response.ok) throw new AlertRequestError(readApiError(payload, "Unable to load alert."));
       setData(normalizeAdminAlertDetails(payload.data));
     } catch (reason) {
-      if (!signal?.aborted) setError(reason instanceof Error ? reason.message : "Unable to load alert.");
+      if (signal?.aborted) return;
+      if (reason instanceof AlertRequestError) {
+        setError(reason.info.message);
+        setErrorInfo(reason.info);
+      } else {
+        setError(reason instanceof Error ? reason.message : "Unable to load alert.");
+      }
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
@@ -41,6 +52,7 @@ export function AdminAlertDetail({ alertId, locale }: { alertId: string; locale:
     if (action === "reply" && !reply.trim()) return;
     setPending(action);
     setError("");
+    setErrorInfo(null);
     setNotice("");
     try {
       const payload: Record<string, string> = { action };
@@ -55,20 +67,25 @@ export function AdminAlertDetail({ alertId, locale }: { alertId: string; locale:
         body: JSON.stringify(payload),
       });
       const responseBody = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(responseBody.error || "Unable to update alert.");
+      if (!response.ok) throw new AlertRequestError(readApiError(responseBody, "Unable to update alert."));
       setData(normalizeAdminAlertDetails(responseBody.data));
       if (action === "reply") setReply("");
       if (action === "resolve") setResolutionNote("");
       setNotice(actionNotice(action, locale));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to update alert.");
+      if (reason instanceof AlertRequestError) {
+        setError(reason.info.message);
+        setErrorInfo(reason.info);
+      } else {
+        setError(reason instanceof Error ? reason.message : "Unable to update alert.");
+      }
     } finally {
       setPending(null);
     }
   }
 
   if (loading) return <div className="platform-card loading-card"><span className="loading-orbit" />{ar ? "جارٍ تحميل التنبيه…" : "Loading alert…"}</div>;
-  if (error && !data) return <AlertError locale={locale} message={error} onRetry={() => void load()} />;
+  if (error && !data) return <AlertError locale={locale} message={error} info={errorInfo} onRetry={() => void load()} />;
   if (!data) return null;
 
   const { alert } = data;
@@ -86,7 +103,16 @@ export function AdminAlertDetail({ alertId, locale }: { alertId: string; locale:
         <strong>{ar ? "تفاصيل التنبيه" : "Alert details"}</strong>
       </nav>
 
-      {error && <div className="setup-notice platform-notice" role="alert"><span className="setup-notice-icon">!</span><div><strong>{ar ? "تعذر تنفيذ الإجراء" : "Action could not be completed"}</strong><p>{error}</p></div></div>}
+      {error && (
+        <div className="setup-notice platform-notice" role="alert">
+          <span className="setup-notice-icon">!</span>
+          <div>
+            <strong>{ar ? "تعذر تنفيذ الإجراء" : "Action could not be completed"}</strong>
+            <p>{error}</p>
+            <ErrorDetails locale={locale} info={errorInfo} />
+          </div>
+        </div>
+      )}
       {notice && <p className="admin-action-notice" role="status">{notice}</p>}
 
       <section className="platform-card admin-alert-hero">
@@ -174,9 +200,70 @@ export function AdminAlertDetail({ alertId, locale }: { alertId: string; locale:
   );
 }
 
-function AlertError({ locale, message, onRetry }: { locale: Locale; message: string; onRetry: () => void }) {
+function AlertError({ locale, message, info, onRetry }: { locale: Locale; message: string; info: ApiErrorInfo | null; onRetry: () => void }) {
   const ar = locale === "ar";
-  return <div className="setup-notice platform-notice" role="alert"><span className="setup-notice-icon">!</span><div><strong>{ar ? "تعذر فتح التنبيه" : "Alert could not be opened"}</strong><p>{message}</p><p><button type="button" className="owner-admin-link" onClick={onRetry}>{ar ? "إعادة المحاولة" : "Try again"}</button>{" "}<a className="owner-admin-link" href="/admin/alerts">{ar ? "كل التنبيهات" : "All alerts"}</a></p></div></div>;
+  return (
+    <div className="setup-notice platform-notice" role="alert">
+      <span className="setup-notice-icon">!</span>
+      <div>
+        <strong>{ar ? "تعذر فتح التنبيه" : "Alert could not be opened"}</strong>
+        <p>{message}</p>
+        <ErrorDetails locale={locale} info={info} />
+        <p>
+          <button type="button" className="owner-admin-link" onClick={onRetry}>{ar ? "إعادة المحاولة" : "Try again"}</button>{" "}
+          <a className="owner-admin-link" href="/admin/alerts">{ar ? "كل التنبيهات" : "All alerts"}</a>{" "}
+          <a className="owner-admin-link" href="/api/debug/alerts">{ar ? "تشخيص الاتصال بالـ API" : "Diagnose the API call"}</a>
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What the staff member needs to quote when they ask for help: the actionable
+ * hint the API returned, the machine code and the request id of the log line.
+ * `hint` and `code` are only ever sent by the staff-only routes.
+ */
+function ErrorDetails({ locale, info }: { locale: Locale; info: ApiErrorInfo | null }) {
+  if (!info || (!info.hint && !info.code && !info.requestId)) return null;
+  const ar = locale === "ar";
+  return (
+    <div className="admin-alert-error-details">
+      {info.hint && <p>{info.hint}</p>}
+      <p className="admin-alert-error-meta">
+        {info.code && <span>{ar ? "الرمز" : "Code"}: {info.code}</span>}
+        {info.requestId && <span>{ar ? "معرّف الطلب" : "Request"}: {info.requestId}</span>}
+      </p>
+    </div>
+  );
+}
+
+interface ApiErrorInfo {
+  message: string;
+  code?: string;
+  hint?: string;
+  requestId?: string;
+}
+
+/** Carries the parsed API error so the catch blocks keep its details. */
+class AlertRequestError extends Error {
+  readonly info: ApiErrorInfo;
+  constructor(info: ApiErrorInfo) {
+    super(info.message);
+    this.name = "AlertRequestError";
+    this.info = info;
+  }
+}
+
+function readApiError(payload: unknown, fallback: string): ApiErrorInfo {
+  const record = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const text = (value: unknown) => (typeof value === "string" && value.trim() ? value : undefined);
+  return {
+    message: text(record.error) ?? fallback,
+    code: text(record.code),
+    hint: text(record.hint),
+    requestId: text(record.requestId),
+  };
 }
 
 function actionNotice(action: "acknowledge" | "resolve" | "reply", locale: Locale): string {
