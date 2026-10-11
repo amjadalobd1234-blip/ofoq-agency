@@ -31,6 +31,16 @@
   - سياسة إدخال `alerts_insert_authenticated` (RLS) مضيّقة إلى صفوف التصعيد فقط، مع بقاء صلاحية الجدول مسحوبة.
   - `ofoq_escalation_diagnostics`: RPC لتشخيص فشل التصعيد، مربوط بـ `GET /api/debug/escalation` وقسم 8 في `/debug`.
   - التفاصيل وخطوات الاختبار في `docs/ESCALATION-AR.md`.
+- `db/migrations/supabase/0006_escalate_manual_overload.sql`: نسخة مختصرة للاستخدام اليدوي.
+  - `public.ofoq_client_escalate(p_conversation_id, p_reason, p_summary, p_severity)` تُقبل الآن
+    بأربعة وسائط أيضًا — وهي **غلاف** يسند التسلسل إلى الدالة الأصلية بتسعة وسائط، فلا يوجد إلا
+    كاتب واحد لجدول `alerts` (منع التكرار، `PENDING`، الإشعارات، `activities` كلها تبقى في مسار واحد).
+  - التطبيق نفسه **لا يتغير**: يستمر في استدعاء الدالة بتسعة وسائط
+    (`p_conversation_id, p_category, p_severity, p_title_ar, p_title_en, p_body_ar, p_body_en, p_reason, p_signals`).
+  - لا تمنح هذه الملف أي صلاحية على الجداول، ولا تعتمد على `GRANT` المباشر الذي أُضيف تجريبيًا على
+    المشروع الحي: الدالة `SECURITY DEFINER` وتكتب `alerts` بصلاحية المالك.
+  - في SQL Editor لا توجد جلسة مستخدم، لذا يجب ضبط `request.jwt.claims` قبل الاختبار اليدوي —
+    الرد `Authentication required` يعني أن الفحص يعمل، لا أن هناك خللًا جديدًا.
 - عزل سجلات العميل عبر التحقق من `auth.uid()` داخل كل RPC. لا تُعاد التكاليف الداخلية أو الملاحظات الداخلية إلى بوابة العميل.
 
 > لا يتصل هذا الإعداد بقاعدة البيانات من Arena. نفّذ SQL يدويًا في لوحة Supabase فقط، ثم يطلب التطبيق البيانات عبر HTTPS وRLS.

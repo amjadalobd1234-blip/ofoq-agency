@@ -156,6 +156,89 @@ describe("escalation works for accounts with no client record (owners)", () => {
   });
 });
 
+/**
+ * Migration 0006 adds a 4-argument overload so a hand-written call from the
+ * Supabase SQL Editor (`ofoq_client_escalate(id, reason, summary, severity)`)
+ * reaches the same escalation the app uses — without becoming a second copy of
+ * the alert-writing logic. `ERROR 42883 … does not exist` for the 4-argument
+ * form never meant "nothing is installed": it means "no function matches this
+ * name *and* this argument list", so the nine-argument contract the app calls
+ * is asserted here too, in both directions.
+ */
+describe("manual 4-argument overload (0006)", () => {
+  const manualSql = fs.readFileSync(
+    path.join(supabaseDir, "0006_escalate_manual_overload.sql"),
+    "utf8",
+  );
+  const serviceSource = fs.readFileSync(
+    path.join(rootDir, "src", "lib", "services", "escalation.service.ts"),
+    "utf8",
+  );
+
+  it("accepts the four arguments a manual test passes", () => {
+    expect(manualSql).toContain("CREATE OR REPLACE FUNCTION public.ofoq_client_escalate(");
+    for (const arg of [
+      "p_conversation_id text,",
+      "p_reason text DEFAULT 'HUMAN_REQUEST',",
+      "p_summary text DEFAULT NULL,",
+      "p_severity text DEFAULT 'IMPORTANT'",
+    ]) {
+      expect(manualSql).toContain(arg);
+    }
+    expect(manualSql).toContain("REVOKE ALL ON FUNCTION public.ofoq_client_escalate(text, text, text, text) FROM PUBLIC, anon");
+    expect(manualSql).toContain("GRANT EXECUTE ON FUNCTION public.ofoq_client_escalate(text, text, text, text) TO authenticated");
+  });
+
+  it("delegates to the nine-argument function instead of re-implementing it", () => {
+    expect(manualSql).toContain("v_result := public.ofoq_client_escalate(");
+    // One writer of alerts. A second implementation is how an escalation
+    // starts answering `ok` while stopping to notify the owner.
+    expect(manualSql).not.toContain("INSERT INTO public.alerts");
+    expect(manualSql).not.toContain("INSERT INTO public.notifications");
+    // SECURITY DEFINER + a locked search_path, exactly like the canonical one.
+    expect(manualSql).toContain("SECURITY DEFINER");
+    expect(manualSql).toContain("SET search_path = ''");
+  });
+
+  it("keeps the service's nine arguments callable and named as the SQL declares them", () => {
+    const rpcArgs = /client\.rpc\(\s*"ofoq_client_escalate",\s*\{([^}]*)\}/s.exec(serviceSource);
+    expect(rpcArgs).not.toBeNull();
+    const keys = [...rpcArgs![1].matchAll(/(p_[a-z_]+):/g)].map((match) => match[1]);
+    expect(keys).toEqual([
+      "p_conversation_id",
+      "p_category",
+      "p_severity",
+      "p_title_ar",
+      "p_title_en",
+      "p_body_ar",
+      "p_body_en",
+      "p_reason",
+      "p_signals",
+    ]);
+    // The overload must never be mistaken for the application's path: `p_summary`
+    // exists only on the 4-argument form.
+    expect(serviceSource).not.toContain("p_summary");
+  });
+
+  it("refuses loudly when the canonical function is missing, and says what to apply", () => {
+    expect(manualSql).toContain("public.ofoq_has_canonical_escalate()");
+    expect(manualSql).toContain("0004_escalation_owner_support.sql");
+    expect(manualSql).toContain("USING ERRCODE = '42883'");
+    // The guard never aborts the migration on a project without 0004.
+    expect(manualSql).toContain("RAISE WARNING");
+  });
+
+  it("documents that the SQL Editor has no session user", () => {
+    // Otherwise the next person reads «Authentication required» as a new bug.
+    expect(manualSql).toContain("SET LOCAL request.jwt.claims");
+    expect(manualSql).toContain("28000");
+  });
+
+  it("ships in the generated Supabase setup bundle", () => {
+    expect(setupSql).toContain(manualSql.trim());
+  });
+});
+
 describe("admin dashboard reads the escalation alerts", () => {
   it("counts URGENT and IMPORTANT alerts as the urgent total", () => {
     expect(portalSql).toContain(
