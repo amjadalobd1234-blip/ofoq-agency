@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { AdminAlertFilter, AdminAlertListResponse } from "@/lib/admin/alert-types";
+import { normalizeAdminAlertList } from "@/lib/admin/payload";
 import type { Locale } from "@/lib/domain/types";
 
 const FILTERS: AdminAlertFilter[] = ["ALL", "OPEN", "NEW", "ACKNOWLEDGED", "RESOLVED"];
@@ -24,7 +25,7 @@ export function AdminAlertList({ locale }: { locale: Locale }) {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "Unable to load alerts.");
-      setData(payload.data as AdminAlertListResponse);
+      setData(normalizeAdminAlertList(payload.data));
     } catch (reason) {
       if (!signal?.aborted) setError(reason instanceof Error ? reason.message : "Unable to load alerts.");
     } finally {

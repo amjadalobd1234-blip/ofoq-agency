@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { AdminAlertDetailsResponse } from "@/lib/admin/alert-types";
+import { normalizeAdminAlertDetails } from "@/lib/admin/payload";
 import type { Locale } from "@/lib/domain/types";
 
 export function AdminAlertDetail({ alertId, locale }: { alertId: string; locale: Locale }) {
@@ -22,7 +23,7 @@ export function AdminAlertDetail({ alertId, locale }: { alertId: string; locale:
       const response = await fetch(`/api/admin/alerts/${encodeURIComponent(alertId)}`, { cache: "no-store", signal });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "Unable to load alert.");
-      setData(payload.data as AdminAlertDetailsResponse);
+      setData(normalizeAdminAlertDetails(payload.data));
     } catch (reason) {
       if (!signal?.aborted) setError(reason instanceof Error ? reason.message : "Unable to load alert.");
     } finally {
@@ -55,7 +56,7 @@ export function AdminAlertDetail({ alertId, locale }: { alertId: string; locale:
       });
       const responseBody = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(responseBody.error || "Unable to update alert.");
-      setData(responseBody.data as AdminAlertDetailsResponse);
+      setData(normalizeAdminAlertDetails(responseBody.data));
       if (action === "reply") setReply("");
       if (action === "resolve") setResolutionNote("");
       setNotice(actionNotice(action, locale));
