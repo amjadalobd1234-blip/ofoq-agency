@@ -26,6 +26,8 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [providerAvailable, setProviderAvailable] = useState(false);
+  /** True once the platform really handed this conversation to a human. */
+  const [escalated, setEscalated] = useState(false);
   const tailRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -75,6 +77,8 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
         { ...(result.reply as ChatMessage), provider: result.provider ?? result.reply?.provider ?? null },
       ]);
       setProviderAvailable(Boolean(result.providerAvailable));
+      // The route only reports `escalated` after the alert row was written.
+      if (result.escalated) setEscalated(true);
     } catch (reason) {
       setMessages((current) => current.filter((item) => item.id !== tempId));
       setInput(message);
@@ -106,6 +110,7 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
 
         {intent === "service_request" && <div className="chat-context-note">{ar ? "ابدأ بوصف الخدمة أو النتيجة التي تبحث عنها. لا تحتاج إلى تعبئة نموذج طويل." : "Describe the service or outcome you need. There is no long form to complete."}</div>}
         {ready && <div className="chat-provider-note"><span>i</span>{providerAvailable ? (ar ? "المساعد متصل بمزودي الذكاء الاصطناعي (Groq، Gemini، Cohere وغيرها). قد تُرسل رسائل المحادثة إلى المزود لتوليد الرد، ونعود إلى الردود المحلية إذا تعذّرت الخدمة. لا تشارك كلمات مرور أو بيانات دفع." : "The assistant is connected to AI providers (Groq, Gemini, Cohere and others). Conversation messages may be sent to a provider for generation, with local replies as a fallback. Do not share passwords or payment details.") : copy.providerOff}</div>}
+        {escalated && <div className="chat-escalation-note" role="status"><span>✔</span>{ar ? "تم تحويل محادثتك إلى فريق أفق البشري: أُنشئ تنبيه في لوحة الوكالة وتم إشعار المالك. سيتواصل معك أحد أعضاء الفريق." : "Your conversation has been handed over to the Ofoq human team: an alert was created in the agency control room and the owner was notified. A team member will contact you."}</div>}
         {error && <div className="form-notice form-notice-error chat-error" role="alert">{error}</div>}
 
         <div className="chat-messages" role="log" aria-live="polite" aria-relevant="additions text">
@@ -139,7 +144,7 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
           <ol className="chat-steps">
             {(ar ? ["نفهم هدفك واحتياجك تدريجيًا.", "نلخص ما فهمناه ونتأكد منه.", "نقترح خدمة ومدة وسعرًا واضحًا.", "تتابع مشروعك من بوابة العميل."] : ["We learn your goals gradually.", "We summarise and confirm the brief.", "We suggest a service, timeline and clear price.", "Follow delivery in your client portal."]).map((step, index) => <li key={step}><span>{String(index + 1).padStart(2, "0")}</span>{step}</li>)}
           </ol>
-          <p className="chat-human-note">{ar ? "إذا كان الطلب غير واضح أو استثنائيًا، لن نخترع سعرًا أو وعدًا. هذه النسخة لا ترسل تنبيهًا فوريًا للفريق البشري؛ تُحفَظ رسائلك في حسابك." : "For unusual or unclear requests, we will not invent a price or promise. This version does not send an immediate human handoff alert; your messages are saved to your account."}</p>
+          <p className="chat-human-note">{ar ? "إذا كان الطلب غير واضح أو استثنائيًا، لن نخترع سعرًا أو وعدًا. اكتب «أريد التحدث مع شخص من الفريق» متى شئت: يُنشأ تنبيه فعلي في لوحة الوكالة ويصل بريد إلى المالك." : "For unusual or unclear requests, we will not invent a price or promise. Write “I want to speak with a person” at any time: a real alert is created in the agency control room and the owner is notified by email."}</p>
         </article>
         <article className="platform-card chat-aside-card chat-privacy-card"><span className="privacy-icon">◇</span><div><strong>{ar ? "خصوصيتك أولًا" : "Privacy first"}</strong><p>{ar ? "لا ترسل بيانات بطاقة أو كلمة مرور أو معلومات حساسة في المحادثة." : "Do not share card details, passwords, or sensitive information in chat."}</p></div></article>
       </aside>

@@ -1867,6 +1867,8 @@ button:disabled {
 .card-heading-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; margin-bottom: 14px; }
 .card-heading-row h2 { margin: 5px 0 0; color: #f3f0e8; font-family: var(--font-display); font-size: 18px; font-weight: 600; }
 .card-heading-row .eyebrow { color: #bc9c43; font-size: 9px; }
+.card-subtitle { margin: 5px 0 0; color: #837f76; font-size: 9px; line-height: 1.7; }
+.alert-meta { display: block; margin-top: 3px; color: #7d7970; font-size: 9px; letter-spacing: 0.2px; }
 .subtle-link { color: var(--gold-light); font-size: 11px; white-space: nowrap; }
 .subtle-link:hover { text-decoration: underline; text-underline-offset: 4px; }
 .mini-count { display: inline-grid; min-width: 26px; height: 26px; place-items: center; border: 1px solid rgba(212, 175, 55, 0.28); border-radius: 50%; color: var(--gold-light); font-family: var(--font-latin); font-size: 10px; }
@@ -1931,6 +1933,8 @@ button:disabled {
 .chat-provider-note { display: flex; align-items: flex-start; gap: 7px; }
 .chat-provider-note > span { display: inline-grid; width: 15px; height: 15px; flex: 0 0 auto; place-items: center; border: 1px solid rgba(245, 215, 110, 0.4); border-radius: 50%; color: var(--gold-light); font-family: var(--font-latin); font-size: 9px; }
 .chat-context-note { color: #e0cb82; }
+.chat-escalation-note { display: flex; align-items: flex-start; gap: 7px; margin: 10px 13px 0; border: 1px solid rgba(122, 173, 126, 0.35); border-radius: 3px; background: rgba(122, 173, 126, 0.08); padding: 8px 10px; color: #b9d5bb; font-size: 10px; line-height: 1.65; }
+.chat-escalation-note > span { flex: 0 0 auto; color: #7aad7e; }
 .chat-error { margin: 12px 13px 0; }
 .chat-messages { display: flex; min-height: 270px; max-height: min(56svh, 620px); flex: 1; flex-direction: column; gap: 14px; overflow-y: auto; overscroll-behavior: contain; padding: 18px 14px; scrollbar-color: rgba(212, 175, 55, 0.25) transparent; scrollbar-width: thin; }
 .chat-loading { display: flex; align-items: center; justify-content: center; gap: 10px; margin: auto; color: #89857c; font-size: 11px; }

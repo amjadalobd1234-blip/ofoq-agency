@@ -19,6 +19,7 @@
 import type { AiUsageSink } from "@/lib/ai/usage";
 import { chat, type AiMessage } from "@/lib/ai/ai-service";
 import { detectLanguage } from "@/lib/ai/language";
+import { detectEscalation } from "@/lib/agents/escalation-agent";
 import { providerLabel } from "@/lib/ai/providers";
 import { logger } from "@/lib/core/logger";
 import type { Locale } from "@/lib/domain/types";
@@ -49,8 +50,8 @@ const SYSTEM_INSTRUCTION = [
   "Ask only the next necessary discovery question, usually one question at a time. Understand the client's goal, service, market, platforms, scope and timeframe gradually.",
   "Never invent clients, portfolio results, campaign metrics, service availability, exact prices, offers, project creation, payments or external integrations. Do not claim you created or changed records beyond this saved conversation.",
   "Do not expose other customers, internal agency costs, margins, private notes, secrets or payment-card data. Never ask for card details or promise ad spend.",
-  "If the request is unusual, unclear, involves refunds, a major discount, a large budget, legal/safety concerns, or a commitment the system cannot confirm, say that a human team member must review it. Do not claim that a notification was sent.",
-  "Explain that a human agency team member can take over whenever the client asks. Keep answers concise and practical.",
+  "If the request is unusual, unclear, involves refunds, a major discount, a large budget, legal/safety concerns, or a commitment the system cannot confirm, say that a human team member must review it.",
+  "Explain that a human agency team member can take over whenever the client asks. When you hand over, say only that the Ofoq team will follow up: the platform itself records the handoff (an alert for the agency and an email to the owner) and appends the confirmation, so never describe tickets, projects, offers, invoices or payments you did not create. Keep answers concise and practical.",
 ].join(" ");
 
 function languageInstruction(locale: Locale): string {
@@ -125,20 +126,21 @@ export async function completeOfoqChat(input: {
 /**
  * Deterministic fallback replies.
  *
- * These are deliberately restrained: they never quote a price, never promise a
- * result and never claim an action (such as notifying the team) that did not
- * actually happen.
+ * These are deliberately restrained: they never quote a price and never promise
+ * a result. They may state the *intent* to hand over to a human — the chat route
+ * runs the escalation agent right after and appends the verified outcome
+ * (`handoffNotice`), so the client is told what actually happened.
  */
 export function localReply(message: string, preferredLocale: Locale): string {
   const detected = detectLanguage(message);
   const locale: Locale = detected === "ar" || detected === "en" ? detected : preferredLocale;
   const lower = message.toLowerCase();
-  const asksHuman = /(human|person|team member|موظف|فريق بشري|شخص حقيقي)/i.test(lower);
+  const asksHuman = detectEscalation({ latestMessage: message }).category === "HUMAN_REQUEST";
 
   if (asksHuman) {
     return locale === "ar"
-      ? "أفهم رغبتك بالتحدث مع شخص من الفريق. هذه النسخة تحفظ المحادثة لكنها لا ترسل تنبيهًا مباشرًا للفريق، لذلك لا أستطيع أن أعدك بمتابعة فورية."
-      : "I understand you would like to speak with a person. This version saves the conversation but does not send a live team alert, so I cannot promise an immediate follow-up.";
+      ? "أفهم رغبتك بالتحدث مع شخص من فريق أفق، وسأحوّل محادثتك الآن إلى الفريق البشري."
+      : "I understand you would like to speak with a person, so I am handing this conversation over to the Ofoq human team now.";
   }
 
   if (/(price|cost|budget|سعر|تكلفة|ميزانية)/i.test(lower)) {

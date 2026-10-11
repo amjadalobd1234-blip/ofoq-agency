@@ -326,6 +326,7 @@ DECLARE
   v_campaigns jsonb;
   v_reports jsonb;
   v_alerts jsonb;
+  v_leads jsonb;
   v_agent_actions jsonb;
   v_financials jsonb;
 BEGIN
@@ -378,10 +379,27 @@ BEGIN
   SELECT coalesce(jsonb_agg(jsonb_build_object(
     'id', a.id, 'severity', a.severity, 'category', a.category,
     'titleAr', a.title_ar, 'titleEn', a.title_en, 'bodyAr', a.body_ar,
-    'bodyEn', a.body_en, 'status', a.status, 'createdAt', a.created_at
+    'bodyEn', a.body_en, 'status', a.status, 'createdAt', a.created_at,
+    'entityType', a.entity_type, 'entityId', a.entity_id,
+    'customerName', c.contact_name, 'customerEmail', c.email
   ) ORDER BY a.created_at DESC), '[]'::jsonb) INTO v_alerts
   FROM (SELECT * FROM public.alerts WHERE status IN ('NEW', 'ACKNOWLEDGED')
-        AND target_role <> 'CLIENT' ORDER BY created_at DESC LIMIT 8) AS a;
+        AND target_role <> 'CLIENT' ORDER BY created_at DESC LIMIT 12) AS a
+  LEFT JOIN public.customers AS c ON c.id = a.customer_id;
+
+  -- "New requests" the assistant produced: clients who asked for a human or
+  -- whose need is now understood. These are alerts, not offers, and they are
+  -- the ones the owner must not miss.
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+    'id', a.id, 'severity', a.severity, 'category', a.category, 'status', a.status,
+    'titleAr', a.title_ar, 'titleEn', a.title_en, 'bodyAr', a.body_ar,
+    'bodyEn', a.body_en, 'conversationId', a.entity_id, 'createdAt', a.created_at,
+    'customerName', c.contact_name, 'customerEmail', c.email
+  ) ORDER BY a.created_at DESC), '[]'::jsonb) INTO v_leads
+  FROM (SELECT * FROM public.alerts
+        WHERE category IN ('NEW_LEAD', 'HUMAN_REQUEST') AND status IN ('NEW', 'ACKNOWLEDGED')
+        ORDER BY created_at DESC LIMIT 12) AS a
+  LEFT JOIN public.customers AS c ON c.id = a.customer_id;
 
   SELECT coalesce(jsonb_agg(jsonb_build_object(
     'id', a.id, 'agentKey', a.agent_key, 'action', a.action,
@@ -423,10 +441,15 @@ BEGIN
       'activeCampaigns', (SELECT count(*) FROM public.campaigns WHERE status = 'ACTIVE'),
       'reports30d', (SELECT count(*) FROM public.reports WHERE created_at >= to_char(timezone('utc', now()) - interval '30 days', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')),
       'pendingAgentActions', (SELECT count(*) FROM public.agent_actions WHERE requires_approval = 1 AND approved_at IS NULL),
-      'urgentAlerts', (SELECT count(*) FROM public.alerts WHERE severity = 'URGENT' AND status IN ('NEW', 'ACKNOWLEDGED'))
+      -- "Urgent alerts" card: everything that needs a human, URGENT and IMPORTANT.
+      'urgentAlerts', (SELECT count(*) FROM public.alerts WHERE severity IN ('URGENT', 'IMPORTANT') AND status IN ('NEW', 'ACKNOWLEDGED') AND target_role <> 'CLIENT'),
+      'criticalAlerts', (SELECT count(*) FROM public.alerts WHERE severity = 'URGENT' AND status IN ('NEW', 'ACKNOWLEDGED') AND target_role <> 'CLIENT'),
+      -- Open client escalations raised by the assistant (HUMAN_REQUEST + NEW_LEAD).
+      'newLeads', (SELECT count(*) FROM public.alerts WHERE category IN ('NEW_LEAD', 'HUMAN_REQUEST') AND status IN ('NEW', 'ACKNOWLEDGED'))
     ),
     'clients', v_clients, 'requests', v_requests, 'projects', v_projects,
     'campaigns', v_campaigns, 'reports', v_reports, 'alerts', v_alerts,
+    'leadRequests', v_leads,
     'agentActions', v_agent_actions, 'financials', v_financials,
     'integrations', jsonb_build_object(
       'googleAds', jsonb_build_object('status', 'NOT_CONNECTED'),
