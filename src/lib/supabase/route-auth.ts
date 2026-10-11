@@ -2,19 +2,65 @@ import type { User } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 
 import { getSupabaseAuthStorageKey, getSupabaseConfig } from "./config";
+import { createSupabaseRouteClient } from "./route-client";
 import { createSupabaseServerClient } from "./server";
+import { describeSession, type SessionReport } from "./session-diagnostics";
+import {
+  diagnoseRpcFailure,
+  newRequestId,
+  rpcFailurePayload,
+  type PostgrestErrorLike,
+  type RpcFailureContext,
+} from "./rpc-diagnostics";
+
+export type { PostgrestErrorLike, RpcFailureContext };
 
 type ServerClient = NonNullable<Awaited<ReturnType<typeof createSupabaseServerClient>>>;
 
-export async function requireSupabaseUser(): Promise<
-  | { client: ServerClient; user: User; response?: never }
-  | { client?: never; user?: never; response: Response }
-> {
-  const client = await createSupabaseServerClient();
+/** What a route gets back once a Supabase session has been confirmed. */
+export interface SupabaseSessionAuth {
+  client: ServerClient;
+  user: User;
+  /**
+   * Attaches any session cookie the SDK refreshed during this request to the
+   * outgoing response. Identity when the ambient cookie store is in use (a
+   * route handler's `cookies()` writes are already merged by Next.js).
+   */
+  finalize: (response: Response) => Response;
+  /** Correlates a browser error message with the matching server log line. */
+  requestId: string;
+  /** Cookie/session facts, already redacted — safe to log. */
+  session: SessionReport;
+  /**
+   * Never set on a success — its presence is what lets callers narrow the
+   * return type with the `if (auth.response) return auth.response;` idiom.
+   */
+  response?: never;
+}
+
+/**
+ * Confirms the caller's Supabase session.
+ *
+ * Pass the incoming `Request` from the route handler: the client is then built
+ * from THAT request's cookies (and any token it refreshes is written back onto
+ * the response). Callers that omit it keep the previous behaviour — the
+ * ambient `next/headers` store — which is still correct inside a route handler
+ * but cannot report what the request actually carried.
+ */
+export async function requireSupabaseUser(
+  request?: Request,
+): Promise<SupabaseSessionAuth | { client?: never; user?: never; finalize?: never; response: Response }> {
+  const requestId = newRequestId();
+  const config = getSupabaseConfig();
+  const cookieName = config ? getSupabaseAuthStorageKey(config) : null;
+  const report = describeSession(request ?? null, config, cookieName);
+  const routeClient = request ? createSupabaseRouteClient(request) : null;
+  const client = routeClient?.client ?? (await createSupabaseServerClient());
+
   if (!client) {
     return {
       response: Response.json(
-        { error: "Supabase Auth is not configured. Add the public Supabase URL and anon key." },
+        { error: "Supabase Auth is not configured. Add the public Supabase URL and anon key.", code: "SUPABASE_NOT_CONFIGURED", requestId },
         { status: 503, headers: { "Cache-Control": "no-store" } },
       ),
     };
@@ -22,58 +68,92 @@ export async function requireSupabaseUser(): Promise<
 
   const { data, error } = await client.auth.getUser();
   if (error || !data.user) {
-    // Logged server-side only (Netlify Function Logs). Cookie VALUES are never
-    // logged — only names/counts — so tokens don't leak into logs.
-    // - cookieCount 0 → browser isn't sending cookies at all.
-    // - auth cookies present but no user → cookie name/format mismatch or invalid token.
-    const cookieStore = await cookies();
-    const all = cookieStore.getAll();
-    const config = getSupabaseConfig();
-    const expectedName = config ? getSupabaseAuthStorageKey(config) : null;
+    // Logged server-side only (Netlify/Cloudflare Function logs). Cookie VALUES
+    // are never logged — only names, sizes, and the token's non-secret claims.
+    // Reading the report:
+    // - cookieCount 0        → browser isn't sending cookies at all.
+    // - refreshOnly true     → the access token expired and was not refreshed
+    //                          before this route ran (see the middleware matcher).
+    // - projectRef.mismatch  → the session belongs to another Supabase project.
+    // - hasExpectedAuthCookie → cookie name/format mismatch or an invalid token.
+    const ambient = request ? null : await ambientCookieNames();
     // eslint-disable-next-line no-console
-    console.error("[route-auth]", {
-      hasCookies: all.length,
-      cookieNames: all.map((c) => c.name),
-      expectedAuthCookie: expectedName,
-      hasExpectedAuthCookie: expectedName ? all.some((c) => c.name === expectedName || c.name.startsWith(`${expectedName}.`)) : false,
-      authCookieSizes: all.filter((c) => c.name.startsWith("sb-")).map((c) => ({ name: c.name, length: c.value.length, base64Prefixed: c.value.startsWith("base64-") })),
+    console.error("[route-auth] session rejected", {
+      requestId,
+      route: request ? `${request.method ?? "GET"} ${safePath(request)}` : null,
+      ...report,
+      ambientCookieNames: ambient,
       authError: error?.message,
       authErrorCode: error?.code,
       authErrorStatus: error?.status,
     });
     return {
-      response: Response.json({ error: "Authentication required." }, { status: 401, headers: { "Cache-Control": "no-store" } }),
+      response: Response.json(
+        { error: "Authentication required.", code: "AUTH_REQUIRED", requestId },
+        { status: 401, headers: { "Cache-Control": "no-store" } },
+      ),
     };
   }
 
-  return { client, user: data.user };
+  return {
+    client,
+    user: data.user,
+    requestId,
+    session: report,
+    finalize: routeClient ? routeClient.finalize : (response: Response) => response,
+  };
 }
 
-export function rpcFailureResponse(error: { code?: string; message?: string }): Response {
-  const code = error.code ?? "";
-  if (["PGRST202", "PGRST204", "42P01", "42883"].includes(code)) {
-    return Response.json(
-      { error: "Supabase portal migration is not installed yet. Apply docs/setup/supabase-setup.sql in the Supabase SQL Editor." },
-      { status: 503, headers: { "Cache-Control": "no-store" } },
-    );
+/**
+ * Cookie names on the ambient `next/headers` store, for the routes that have
+ * not been switched to `requireSupabaseUser(request)` yet. Never values.
+ */
+async function ambientCookieNames(): Promise<string[] | null> {
+  try {
+    const cookieStore = await cookies();
+    return cookieStore.getAll().map((cookie) => cookie.name);
+  } catch {
+    return null; // Outside a request scope (unit test, background job).
   }
-  if (code === "42501") {
-    return Response.json({ error: "You do not have permission for this data." }, { status: 403, headers: { "Cache-Control": "no-store" } });
+}
+
+function safePath(request: Request): string | null {
+  try {
+    return new URL(request.url).pathname;
+  } catch {
+    return null;
   }
-  if (code === "28000") {
-    return Response.json({ error: "Your session is not active. Sign in again or contact the agency." }, { status: 401, headers: { "Cache-Control": "no-store" } });
-  }
-  if (code === "P0001") {
-    return Response.json({ error: "Please wait briefly before sending another message." }, { status: 429, headers: { "Cache-Control": "no-store", "Retry-After": "5" } });
-  }
-  if (code === "P0002") {
-    return Response.json({ error: "The requested record could not be found." }, { status: 404, headers: { "Cache-Control": "no-store" } });
-  }
-  if (code === "22023") {
-    return Response.json({ error: "The submitted data is invalid." }, { status: 400, headers: { "Cache-Control": "no-store" } });
-  }
-  // Do not send SQL, schema names, or provider details back to the browser.
-  return Response.json({ error: "Unable to load platform data right now." }, { status: 502, headers: { "Cache-Control": "no-store" } });
+}
+
+/**
+ * Turns a failed RPC into the browser response AND the log line that explains
+ * it. The full PostgREST error (code, message, details, hint) is always logged
+ * next to the diagnosis; the browser only ever receives a short, safe message
+ * plus — for staff-only routes that ask for it — the next step.
+ */
+export function rpcFailureResponse(
+  error: { code?: string | null; message?: string | null; details?: string | null; hint?: string | null },
+  context?: RpcFailureContext & { requestId?: string },
+): Response {
+  const report = diagnoseRpcFailure(error, context ?? { rpc: "unknown" });
+  const requestId = context?.requestId ?? newRequestId();
+  // PostgreSQL details stay server-side, but have enough context for support.
+  // eslint-disable-next-line no-console
+  console.error(`[rpc] ${context?.rpc ?? "unknown"} failed (${report.code})`, {
+    requestId,
+    kind: report.kind,
+    httpStatus: report.status,
+    rpc: context?.rpc ?? null,
+    args: context?.args ?? null,
+    projectRefs: { session: context?.sessionProjectRef ?? null, config: context?.configProjectRef ?? null },
+    error: { code: error.code ?? null, message: error.message ?? null, details: error.details ?? null, hint: error.hint ?? null },
+    explanation: report.explanation,
+    nextStep: report.hint,
+  });
+  return Response.json(rpcFailurePayload(report, requestId), {
+    status: report.status,
+    headers: { "Cache-Control": "no-store" },
+  });
 }
 
 /** The caller's own profile row, as far as RLS and column grants allow. */
@@ -99,7 +179,7 @@ const PROFILE_COLUMNS = "id, name, email, role, status, locale";
 export async function fetchOwnProfile(
   client: ServerClient,
   userId: string,
-): Promise<{ profile: SupabaseProfile; error?: never } | { profile?: never; error: { code?: string; message?: string } }> {
+): Promise<{ profile: SupabaseProfile; error?: never } | { profile?: never; error: PostgrestErrorLike }> {
   const { data, error } = await client
     .from("users")
     .select(PROFILE_COLUMNS)
@@ -112,7 +192,7 @@ export async function fetchOwnProfile(
 
 function inactiveSessionResponse(): Response {
   return Response.json(
-    { error: "Your session is not active. Sign in again or contact the agency." },
+    { error: "Your session is not active. Sign in again or contact the agency.", code: "SESSION_INACTIVE" },
     { status: 403, headers: { "Cache-Control": "no-store" } },
   );
 }
@@ -133,13 +213,13 @@ export async function requireOwnRole(
   const { profile, error } = await fetchOwnProfile(client, userId);
   if (!profile) {
     if (error?.code === "NO_PROFILE") return { response: inactiveSessionResponse() };
-    return { response: rpcFailureResponse(error ?? {}) };
+    return { response: rpcFailureResponse(error ?? {}, { rpc: "fetchOwnProfile" }) };
   }
   if (profile.status !== "ACTIVE") return { response: inactiveSessionResponse() };
   if (!allowed.includes(profile.role)) {
     return {
       response: Response.json(
-        { error: "You do not have permission for this action." },
+        { error: "You do not have permission for this action.", code: "ROLE_FORBIDDEN" },
         { status: 403, headers: { "Cache-Control": "no-store" } },
       ),
     };

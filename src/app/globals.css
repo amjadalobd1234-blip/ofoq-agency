@@ -2420,3 +2420,10 @@ button:disabled {
 .admin-error-digest code { border-radius: 3px; background: rgba(255, 255, 255, 0.06); padding: 2px 6px; color: var(--gold-light); font-size: 10px; }
 .admin-error-hint { max-width: 720px; margin: 0; color: #8e8a81; font-size: 11px; line-height: 1.9; }
 .admin-error-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+
+/* Alert-detail error card: the actionable hint, the machine code and the
+   request id of the matching server log line (see /api/debug/alerts). */
+.admin-alert-error-details { display: grid; gap: 4px; margin-top: 7px; }
+.admin-alert-error-details p { margin: 0; max-width: 780px; color: #b9b3a7; font-size: 11px; line-height: 1.85; }
+.admin-alert-error-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; color: #8d887e; font-family: var(--font-latin); font-size: 10px; letter-spacing: 0.02em; }
+.admin-alert-error-meta span { border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 3px; background: rgba(255, 255, 255, 0.03); padding: 2px 7px; }

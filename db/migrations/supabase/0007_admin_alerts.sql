@@ -10,7 +10,96 @@
 --
 -- Apply after 0001_auth_portal.sql and the escalation migrations.
 -- Re-runnable by design: CREATE OR REPLACE only.
+--
+-- This file also verifies itself: block 0 reports what the project already has
+-- and block 5 reports what it has now plus asks PostgREST to reload its schema
+-- cache. That last step is what fixes «the RPC works in the SQL Editor but the
+-- site answers PGRST202 — Could not find the function … in the schema cache».
 -- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- 0. Pre-flight: which of these five functions does the project already have?
+-- -----------------------------------------------------------------------------
+-- Runs BEFORE the definitions on purpose: if a CREATE OR REPLACE below aborts
+-- (PostgreSQL refuses to rename an existing input parameter, for example), the
+-- output already shows the signature that caused it. Warnings are not errors —
+-- this block never blocks the migration.
+DO $ofoq_alerts_preflight$
+DECLARE
+  r record;
+  v_found integer := 0;
+  v_dropped integer := 0;
+  v_expected text[];
+BEGIN
+  FOR r IN
+    SELECT p.proname::text AS proname,
+           p.oid::regprocedure::text AS signature,
+           pg_get_function_identity_arguments(p.oid) AS identity_args,
+           coalesce(p.proargnames, ARRAY[]::text[]) AS arg_names
+    FROM pg_catalog.pg_proc AS p
+    JOIN pg_catalog.pg_namespace AS n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public'
+      AND p.proname::text IN (
+        'ofoq_admin_alerts',
+        'ofoq_admin_alert_details',
+        'ofoq_admin_acknowledge_alert',
+        'ofoq_admin_resolve_alert',
+        'ofoq_admin_reply_to_client'
+      )
+    ORDER BY p.proname::text, p.oid::regprocedure::text
+  LOOP
+    v_found := v_found + 1;
+    RAISE NOTICE 'ofoq: already installed — % [args: %]', r.signature, array_to_string(r.arg_names, ', ');
+
+    -- The exact argument list the application sends, including the types, i.e.
+    -- the string DROP FUNCTION needs.
+    -- Matched on proname, not on the rendered signature: `regprocedure` drops
+    -- the schema only when the function happens to be in search_path, so
+    -- `signature LIKE 'ofoq_…'` is not reliable.
+    v_expected := CASE r.proname
+      WHEN 'ofoq_admin_alerts' THEN ARRAY['p_status text, p_limit integer, p_offset integer']::text[]
+      WHEN 'ofoq_admin_alert_details' THEN ARRAY['p_alert_id text']::text[]
+      WHEN 'ofoq_admin_acknowledge_alert' THEN ARRAY['p_alert_id text']::text[]
+      WHEN 'ofoq_admin_resolve_alert' THEN ARRAY['p_alert_id text, p_note text']::text[]
+      WHEN 'ofoq_admin_reply_to_client' THEN ARRAY['p_alert_id text, p_body text, p_language text']::text[]
+      ELSE NULL
+    END;
+
+    -- PostgREST resolves an RPC by name AND parameter names, so a function the
+    -- SQL Editor reaches positionally can still be invisible to the app:
+    -- `SELECT ofoq_admin_alert_details('<id>')` works while
+    -- `rpc('ofoq_admin_alert_details', { p_alert_id })` answers PGRST202
+    -- «Could not find the function … in the schema cache». A mismatched
+    -- overload ALSO makes `CREATE OR REPLACE` below abort with
+    -- «cannot change name of input parameter», which would leave the whole
+    -- file half-applied — so the non-canonical signature is removed here,
+    -- loudly, and only ever the ones with a different argument list.
+    IF v_expected IS NOT NULL AND r.identity_args IS DISTINCT FROM v_expected[1] THEN
+      BEGIN
+        -- %I takes the NAME only; the argument list comes from
+        -- pg_get_function_identity_arguments(), which is exactly the text
+        -- DROP FUNCTION needs (types, with the parameter names PostgreSQL
+        -- itself prints).
+        EXECUTE format('DROP FUNCTION public.%I(%s)', r.proname, r.identity_args);
+        v_dropped := v_dropped + 1;
+        RAISE WARNING
+          'ofoq: removed % — the application calls this action with (%) and PostgREST matches parameter names. The canonical definition is created below.',
+          r.signature, v_expected[1];
+      EXCEPTION
+        WHEN OTHERS THEN
+          RAISE WARNING
+            'ofoq: % exists with the argument list (%) instead of (%), and it could not be dropped automatically (%). It MUST be dropped by hand before this file can apply.',
+            r.signature, r.identity_args, v_expected[1], SQLERRM;
+      END;
+    END IF;
+  END LOOP;
+  IF v_found = 0 THEN
+    RAISE NOTICE 'ofoq: none of the admin alert RPCs exist yet — this file installs them now.';
+  ELSIF v_dropped > 0 THEN
+    RAISE NOTICE 'ofoq: % non-canonical signature(s) were removed so the definitions below can be installed.', v_dropped;
+  END IF;
+END
+$ofoq_alerts_preflight$;
 
 -- All staff-facing alert rows, with a bounded page. OPEN is NEW + ACKNOWLEDGED.
 CREATE OR REPLACE FUNCTION public.ofoq_admin_alerts(
@@ -429,3 +518,74 @@ GRANT EXECUTE ON FUNCTION public.ofoq_admin_alert_details(text) TO authenticated
 GRANT EXECUTE ON FUNCTION public.ofoq_admin_acknowledge_alert(text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.ofoq_admin_resolve_alert(text, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.ofoq_admin_reply_to_client(text, text, text) TO authenticated;
+
+-- -----------------------------------------------------------------------------
+-- 5. Verification, and the PostgREST schema-cache reload
+-- -----------------------------------------------------------------------------
+-- Why this is here
+-- ----------------
+-- Installing the functions is not enough for the Data API. The classic report —
+-- «the RPC returns data in the SQL Editor, but /admin/alerts/[id] says the
+-- migration is not installed yet» — is this error from PostgREST:
+--
+--     PGRST202: Could not find the function
+--               public.ofoq_admin_alert_details(p_alert_id) in the schema cache
+--
+-- The function can exist and be callable while PostgREST's cached description
+-- of the schema predates it (or describes another project's). NOTIFY asks the
+-- API to reload that cache right away; Supabase's dashboard → Settings → API →
+-- «Reload schema» does the same thing by hand.
+--
+-- The verification block below then reports, in the SQL Editor output, exactly
+-- which of the five functions this project now has and whether the
+-- `authenticated` role may execute each one — the same facts
+-- GET /api/debug/alerts shows from the application side.
+NOTIFY pgrst, 'reload schema';
+
+DO $ofoq_alerts_verify$
+DECLARE
+  r record;
+  v_expected record;
+  v_missing text[] := ARRAY[]::text[];
+  v_installed integer := 0;
+BEGIN
+  FOR v_expected IN
+    SELECT * FROM (VALUES
+      ('ofoq_admin_alerts', ARRAY['p_status', 'p_limit', 'p_offset']::text[]),
+      ('ofoq_admin_alert_details', ARRAY['p_alert_id']::text[]),
+      ('ofoq_admin_acknowledge_alert', ARRAY['p_alert_id']::text[]),
+      ('ofoq_admin_resolve_alert', ARRAY['p_alert_id', 'p_note']::text[]),
+      ('ofoq_admin_reply_to_client', ARRAY['p_alert_id', 'p_body', 'p_language']::text[])
+    ) AS expected(proname, args)
+  LOOP
+    SELECT p.oid::regprocedure::text AS signature,
+           coalesce(p.proargnames, ARRAY[]::text[]) AS arg_names,
+           has_function_privilege('authenticated', p.oid, 'EXECUTE') AS executable
+      INTO r
+    FROM pg_catalog.pg_proc AS p
+    JOIN pg_catalog.pg_namespace AS n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public'
+      AND p.proname::text = v_expected.proname
+      AND coalesce(p.proargnames, ARRAY[]::text[]) = v_expected.args
+    LIMIT 1;
+
+    IF r IS NULL THEN
+      v_missing := v_missing || v_expected.proname;
+      RAISE NOTICE 'ofoq: ✗ % (%) is NOT installed with the argument names the app sends',
+        v_expected.proname, array_to_string(v_expected.args, ', ');
+    ELSE
+      v_installed := v_installed + 1;
+      RAISE NOTICE 'ofoq: ✓ % — executable by authenticated: %',
+        r.signature, r.executable;
+    END IF;
+  END LOOP;
+
+  IF array_length(v_missing, 1) > 0 THEN
+    RAISE WARNING
+      'ofoq: the alert centre will keep answering «Supabase portal migration is not installed yet» until these are fixed: %. Open <site>/api/debug/alerts while signed in for the API-side view, and check that NEXT_PUBLIC_SUPABASE_URL points at THIS project.',
+      array_to_string(v_missing, ', ');
+  ELSE
+    RAISE NOTICE 'ofoq: all % admin alert RPCs are installed with the expected signatures; the Data API was asked to reload its schema cache.', v_installed;
+  END IF;
+END
+$ofoq_alerts_verify$;

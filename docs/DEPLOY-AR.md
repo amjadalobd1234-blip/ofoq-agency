@@ -45,6 +45,10 @@
   - القائمة `/admin/alerts` والتفاصيل `/admin/alerts/[id]` تستخدم إجراءات `ofoq_admin_alerts` و`ofoq_admin_alert_details` فقط؛ لا توجد قراءة مباشرة من المتصفح لجداول التنبيهات أو المحادثات.
   - إجراءات `ofoq_admin_acknowledge_alert` و`ofoq_admin_resolve_alert` و`ofoq_admin_reply_to_client` تتحقق من دور `OWNER`/`PARTNER` داخل قاعدة البيانات، وتسجل صاحب الإجراء في `activities`.
   - رد الفريق يُحفظ كرسالة `STAFF` في نفس المحادثة ويزيد تنبيهات العميل؛ لا يمكن الرد على تنبيه غير مرتبط بمحادثة عميل.
+  - الملف يفحص نفسه عند التطبيق: تقرير قبل التثبيت وبعده، ثم `NOTIFY pgrst, 'reload schema';` في النهاية —
+    لأن الدالة قد تكون موجودة في SQL Editor وغير مرئية للـ Data API (خطأ `PGRST202`) حتى تُعاد قراءة ذاكرة PostgREST المؤقتة.
+  - إجراء الـ middleware يشمل الآن `/api/admin/:path*` (و`/api/me` و`/api/dashboard`) ليجدّد جلسة Supabase قبل أن يقرأها أي route.
+  - التشخيص الكامل (لماذا لا تصل بيانات التنبيه) في `docs/ADMIN-ALERTS-AR.md`، ومن المتصفح: `GET /api/debug/alerts` بعد تسجيل الدخول.
 - عزل سجلات العميل عبر التحقق من `auth.uid()` داخل كل RPC. لا تُعاد التكاليف الداخلية أو الملاحظات الداخلية إلى بوابة العميل.
 
 > لا يتصل هذا الإعداد بقاعدة البيانات من Arena. نفّذ SQL يدويًا في لوحة Supabase فقط، ثم يطلب التطبيق البيانات عبر HTTPS وRLS.
