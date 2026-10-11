@@ -41,6 +41,10 @@
     المشروع الحي: الدالة `SECURITY DEFINER` وتكتب `alerts` بصلاحية المالك.
   - في SQL Editor لا توجد جلسة مستخدم، لذا يجب ضبط `request.jwt.claims` قبل الاختبار اليدوي —
     الرد `Authentication required` يعني أن الفحص يعمل، لا أن هناك خللًا جديدًا.
+- `db/migrations/supabase/0007_admin_alerts.sql`: مركز التنبيهات التفاعلي للفريق.
+  - القائمة `/admin/alerts` والتفاصيل `/admin/alerts/[id]` تستخدم إجراءات `ofoq_admin_alerts` و`ofoq_admin_alert_details` فقط؛ لا توجد قراءة مباشرة من المتصفح لجداول التنبيهات أو المحادثات.
+  - إجراءات `ofoq_admin_acknowledge_alert` و`ofoq_admin_resolve_alert` و`ofoq_admin_reply_to_client` تتحقق من دور `OWNER`/`PARTNER` داخل قاعدة البيانات، وتسجل صاحب الإجراء في `activities`.
+  - رد الفريق يُحفظ كرسالة `STAFF` في نفس المحادثة ويزيد تنبيهات العميل؛ لا يمكن الرد على تنبيه غير مرتبط بمحادثة عميل.
 - عزل سجلات العميل عبر التحقق من `auth.uid()` داخل كل RPC. لا تُعاد التكاليف الداخلية أو الملاحظات الداخلية إلى بوابة العميل.
 
 > لا يتصل هذا الإعداد بقاعدة البيانات من Arena. نفّذ SQL يدويًا في لوحة Supabase فقط، ثم يطلب التطبيق البيانات عبر HTTPS وRLS.

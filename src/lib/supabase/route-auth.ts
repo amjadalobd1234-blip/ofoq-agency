@@ -66,6 +66,12 @@ export function rpcFailureResponse(error: { code?: string; message?: string }): 
   if (code === "P0001") {
     return Response.json({ error: "Please wait briefly before sending another message." }, { status: 429, headers: { "Cache-Control": "no-store", "Retry-After": "5" } });
   }
+  if (code === "P0002") {
+    return Response.json({ error: "The requested record could not be found." }, { status: 404, headers: { "Cache-Control": "no-store" } });
+  }
+  if (code === "22023") {
+    return Response.json({ error: "The submitted data is invalid." }, { status: 400, headers: { "Cache-Control": "no-store" } });
+  }
   // Do not send SQL, schema names, or provider details back to the browser.
   return Response.json({ error: "Unable to load platform data right now." }, { status: 502, headers: { "Cache-Control": "no-store" } });
 }
