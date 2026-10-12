@@ -3,12 +3,13 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 
 import {
-  CLIENTS_COUNTED_SO_FAR,
   calculateServiceEstimate,
-  describeClientEstimate,
+  formatCount,
+  formatUsd,
   type BudgetBand,
   type PricingInput,
   type PricingServiceType,
+  type TargetingArea,
 } from "@/lib/agents/pricing-agent";
 import type { Locale } from "@/lib/domain/types";
 import { dictionaries } from "@/lib/i18n/dictionaries";
@@ -42,10 +43,19 @@ interface ServiceRequestContext {
   answerLog: ServiceRequestAnswerEvent[];
 }
 
-export type ServiceRequestStep = "TYPE" | "SIZE" | "PLATFORMS" | "DEADLINE" | "BUDGET" | "SUMMARY";
+export type ServiceRequestStep =
+  | "TYPE"
+  | "SIZE"
+  | "PLATFORMS"
+  | "DEADLINE"
+  | "BUDGET"
+  | "BUSINESS_TYPE"
+  | "PRICE_RANGE"
+  | "TARGETING"
+  | "SUMMARY";
 /** Every step except SUMMARY asks one question. */
 export type ServiceRequestQuestionStep = Exclude<ServiceRequestStep, "SUMMARY">;
-export type ServiceRequestAnswerKey = "type" | "size" | "platforms" | "deadline" | "budget";
+export type ServiceRequestAnswerKey = "type" | "size" | "platforms" | "deadline" | "budget" | "businessType" | "priceRange" | "targeting";
 export type ServiceRequestAnswers = Partial<Record<ServiceRequestAnswerKey, string>>;
 
 interface ServiceRequestAnswerEvent {
@@ -65,7 +75,17 @@ interface ServiceRequestQuestion {
   options: ServiceRequestOption[];
 }
 
-export const SERVICE_REQUEST_STEPS: readonly ServiceRequestStep[] = ["TYPE", "SIZE", "PLATFORMS", "DEADLINE", "BUDGET", "SUMMARY"];
+export const SERVICE_REQUEST_STEPS: readonly ServiceRequestStep[] = [
+  "TYPE",
+  "SIZE",
+  "PLATFORMS",
+  "DEADLINE",
+  "BUDGET",
+  "BUSINESS_TYPE",
+  "PRICE_RANGE",
+  "TARGETING",
+  "SUMMARY",
+];
 
 /** The guided questions of a service request, in order. Option ids are what gets stored; labels are what the client sees. */
 export const SERVICE_REQUEST_QUESTIONS: Record<ServiceRequestQuestionStep, ServiceRequestQuestion> = {
@@ -113,14 +133,46 @@ export const SERVICE_REQUEST_QUESTIONS: Record<ServiceRequestQuestionStep, Servi
   BUDGET: {
     answerKey: "budget",
     question: { ar: "شنو الميزانية التقريبية؟", en: "What is your approximate budget?" },
-    // The bands are the pricing agent's `BudgetBand` ids on purpose: the answer
-    // goes straight into `calculateServiceEstimate` with no translation, and the
-    // same numbers (200/500/1500) drive the budget evaluation it shows back.
     options: [
       { id: "under_200", label: { ar: "أقل من 200$", en: "Under $200" } },
       { id: "200_500", label: { ar: "200-500$", en: "$200-500" } },
       { id: "500_1500", label: { ar: "500-1500$", en: "$500-1500" } },
       { id: "over_1500", label: { ar: "أكثر من 1500$", en: "Over $1500" } },
+    ],
+  },
+  BUSINESS_TYPE: {
+    answerKey: "businessType",
+    question: { ar: "شنو نوع مشروعك؟", en: "What kind of business do you have?" },
+    options: [
+      { id: "online_store", label: { ar: "🛍️ متجر إلكتروني", en: "🛍️ Online store" } },
+      { id: "local_store", label: { ar: "🏪 متجر محلي", en: "🏪 Local shop" } },
+      { id: "restaurant", label: { ar: "🍽️ مطعم/مقهى", en: "🍽️ Restaurant/café" } },
+      { id: "service", label: { ar: "💼 خدمة (استشارات، تعليم، تصميم)", en: "💼 Service (consulting, education, design)" } },
+      { id: "real_estate", label: { ar: "🏗️ عقارات/سيارات", en: "🏗️ Real estate/cars" } },
+      { id: "luxury", label: { ar: "💎 منتجات فاخرة", en: "💎 Luxury products" } },
+      { id: "other", label: { ar: "🌐 شي ثاني", en: "🌐 Something else" } },
+    ],
+  },
+  PRICE_RANGE: {
+    answerKey: "priceRange",
+    question: { ar: "شكد سعر منتجاتك تقريباً؟", en: "How much do your products usually cost?" },
+    options: [
+      { id: "under_50k", label: { ar: "أقل من 50,000 دينار", en: "Under IQD 50,000" } },
+      { id: "50k_150k", label: { ar: "50,000 - 150,000", en: "IQD 50,000 - 150,000" } },
+      { id: "150k_500k", label: { ar: "150,000 - 500,000", en: "IQD 150,000 - 500,000" } },
+      { id: "over_500k", label: { ar: "أكثر من 500,000", en: "Over IQD 500,000" } },
+    ],
+  },
+  TARGETING: {
+    answerKey: "targeting",
+    question: { ar: "وين تريد تستهدف إعلانك؟", en: "Where would you like to target your campaign?" },
+    options: [
+      { id: "iraq_all", label: { ar: "🇮🇶 العراق كله", en: "🇮🇶 All Iraq" } },
+      { id: "baghdad", label: { ar: "🏙️ بغداد فقط", en: "🏙️ Baghdad only" } },
+      { id: "basra", label: { ar: "🌊 البصرة فقط", en: "🌊 Basra only" } },
+      { id: "three_cities", label: { ar: "🏙️ بغداد + البصرة + أربيل", en: "🏙️ Baghdad + Basra + Erbil" } },
+      { id: "gulf", label: { ar: "🌍 الخليج (السعودية، الإمارات، الكويت)", en: "🌍 Gulf (Saudi Arabia, UAE, Kuwait)" } },
+      { id: "arabic_global", label: { ar: "🌐 عربي عام", en: "🌐 General Arabic-speaking audience" } },
     ],
   },
 };
@@ -145,12 +197,12 @@ const SERVICE_REQUEST_WELCOME: Record<Locale, string> = {
   en: "Welcome to Ofoq 👋\nI'm the Ofoq assistant, and I'll help you build your request step by step.\n\nFirst: what type of service do you need? (Design / Ads / Social media / Content / SEO / Other)",
 };
 
-/** Shown after the last answer; the price estimation follows it immediately. */
+/** Shown after the last answer; the estimate follows it immediately. */
 function serviceRequestSummary(answers: ServiceRequestAnswers, locale: Locale): string {
   const label = (step: ServiceRequestQuestionStep) => optionLabel(step, answers[SERVICE_REQUEST_QUESTIONS[step].answerKey], locale);
   return locale === "ar"
-    ? `تمام، فهمت طلبك 👌\n\n- الخدمة: ${label("TYPE")}\n- الحجم: ${label("SIZE")}\n- المنصات: ${label("PLATFORMS")}\n- التسليم: ${label("DEADLINE")}\n- الميزانية: ${label("BUDGET")}\n\nخليني أحسب لك سعر تقديري...`
-    : `Great, I've got your request 👌\n\n- Service: ${label("TYPE")}\n- Size: ${label("SIZE")}\n- Platforms: ${label("PLATFORMS")}\n- Delivery: ${label("DEADLINE")}\n- Budget: ${label("BUDGET")}\n\nLet me work out an estimated price for you...`;
+    ? `تمام، فهمت طلبك 👌\n\n- الخدمة: ${label("TYPE")}\n- الحجم: ${label("SIZE")}\n- المنصات: ${label("PLATFORMS")}\n- التسليم: ${label("DEADLINE")}\n- الميزانية: ${label("BUDGET")}\n- نوع المشروع: ${label("BUSINESS_TYPE")}\n- سعر المنتج: ${label("PRICE_RANGE")}\n- المنطقة المستهدفة: ${label("TARGETING")}\n\nخليني أحسب لك تقديراً واضحاً...`
+    : `Great, I've got your request 👌\n\n- Service: ${label("TYPE")}\n- Size: ${label("SIZE")}\n- Platforms: ${label("PLATFORMS")}\n- Delivery: ${label("DEADLINE")}\n- Budget: ${label("BUDGET")}\n- Business type: ${label("BUSINESS_TYPE")}\n- Product price: ${label("PRICE_RANGE")}\n- Target area: ${label("TARGETING")}\n\nLet me prepare a clear estimate...`;
 }
 
 function optionLabel(step: ServiceRequestQuestionStep, optionId: string | undefined, locale: Locale): string {
@@ -173,17 +225,15 @@ export function isServiceRequestComplete(answers: ServiceRequestAnswers): boolea
 }
 
 /**
- * The guided answers as the pricing agent's input.
- *
- * Every value is checked against the option ids the questions actually offer and
- * falls back to the most conservative reading, so a hand-edited sessionStorage
- * entry can never price something the client did not ask for.
+ * Convert the guided answers into the pricing agent's input. Every value is
+ * checked against the choices actually offered, so edited session storage can
+ * never select an unpublished service or targeting multiplier.
  */
-export function requestPricingInput(
-  answers: ServiceRequestAnswers,
-  customerCount = CLIENTS_COUNTED_SO_FAR,
-): PricingInput {
+export function requestPricingInput(answers: ServiceRequestAnswers): PricingInput {
   const budget: BudgetBand = isBudgetBand(answers.budget) ? answers.budget : "under_200";
+  const targeting = SERVICE_REQUEST_QUESTIONS.TARGETING.options.some((option) => option.id === answers.targeting)
+    ? answers.targeting as TargetingArea
+    : "iraq_all";
   return {
     type: SERVICE_TYPE_BY_OPTION[answers.type ?? "other"] ?? "other",
     size: answers.size === "small" || answers.size === "large" ? answers.size : "medium",
@@ -191,7 +241,7 @@ export function requestPricingInput(
     deadline:
       answers.deadline === "urgent_3_days" ? "urgent" : answers.deadline === "flexible_14_days" ? "flexible" : "normal",
     budget,
-    customerCount,
+    targeting,
   };
 }
 
@@ -199,19 +249,76 @@ function isBudgetBand(value: string | undefined): value is BudgetBand {
   return value === "under_200" || value === "200_500" || value === "500_1500" || value === "over_1500";
 }
 
-/**
- * نص التقدير المبدئي بعد الملخص. الصياغة نفسها في وكيل التسعير
- * (`describeClientEstimate`) حتى تبقى مبنية على ما يُسمح بعرضه فقط.
- *
- * The wording lives in the pricing agent, which writes it from the client view
- * alone — the agency fee and the ad-spend split have no path into this text.
- */
-export function serviceRequestEstimate(
-  answers: ServiceRequestAnswers,
-  locale: Locale,
-  customerCount = CLIENTS_COUNTED_SO_FAR,
-): string {
-  return describeClientEstimate(calculateServiceEstimate(requestPricingInput(answers, customerCount)), locale);
+function contactOptions(locale: Locale): string[] {
+  return locale === "ar"
+    ? [
+        "كيف تحب يتواصل معك فريق أفق؟",
+        "□ 📱 واتساب",
+        "□ 📧 إيميل: البريد المسجّل بحسابك",
+        "□ 💬 إشعار في الموقع",
+      ]
+    : [
+        "How would you like the Ofoq team to contact you?",
+        "□ 📱 WhatsApp",
+        "□ 📧 Email: the address registered to your account",
+        "□ 💬 In-app notification",
+      ];
+}
+
+/** The final, client-facing message after the nine-step guided request. */
+export function serviceRequestEstimate(answers: ServiceRequestAnswers, locale: Locale): string {
+  const result = calculateServiceEstimate(requestPricingInput(answers));
+  const ar = locale === "ar";
+  const contact = contactOptions(locale);
+
+  if (result.service === "ads" && result.resultsKind === "numbers") {
+    const reach = result.expectedReach ?? [0, 0];
+    const visits = result.expectedVisits ?? [0, 0];
+    const leads = result.expectedLeads ?? [0, 0];
+    const formatRange = ([min, max]: [number, number]) => `~${formatCount(min, locale)}-${formatCount(max, locale)}`;
+    const lines = [
+      `${ar ? "ميزانيتك" : "Your budget"}: ${formatUsd(result.budgetAmount, locale)} ${ar ? "شهرياً" : "per month"} ${result.budgetEmoji}`,
+    ];
+
+    if (result.budgetQuality === "weak" || result.budgetQuality === "medium") {
+      lines.push(
+        "",
+        ar ? "💡 صريحين معك:" : "💡 To be transparent:",
+        `${formatUsd(result.budgetAmount, locale)} ${ar ? `تكفي لـ ${result.estimatedAdDays} يوم إعلان فعّال.` : `covers about ${result.estimatedAdDays} active ad days.`}`,
+        "",
+        ar ? "📊 النتائج المتوقعة:" : "📊 Expected results:",
+      );
+    } else {
+      lines.push("", ar ? "📊 النتائج المتوقعة شهرياً:" : "📊 Expected monthly results:");
+    }
+
+    lines.push(
+      ar ? `• الظهور: ${formatRange(reach)}` : `• Impressions: ${formatRange(reach)}`,
+      ar ? `• الزيارات: ${formatRange(visits)}` : `• Visits: ${formatRange(visits)}`,
+      ar ? `• المهتمون: ${formatRange(leads)}` : `• Interested people: ${formatRange(leads)}`,
+      "",
+      ar ? "الأرقام تقديرية وليست ضماناً للنتائج." : "These are conservative estimates, not guaranteed results.",
+      "",
+      ...contact,
+    );
+    return lines.join("\n");
+  }
+
+  if (result.minPrice === null || result.maxPrice === null) {
+    return [
+      ar
+        ? "ما عندنا نطاق سعر معتمد لهذا النوع، وما راح نخمن رقماً. يحتاج الطلب مراجعة تفاصيله قبل تحديد السعر."
+        : "We do not have an approved price range for this request, so we will not guess. The scope needs review before a price can be set.",
+      "",
+      ...contact,
+    ].join("\n");
+  }
+
+  return [
+    `${ar ? "السعر التقديري" : "Estimated price"}: ${formatUsd(result.minPrice, locale)}-${formatUsd(result.maxPrice, locale)}`,
+    "",
+    ...contact,
+  ].join("\n");
 }
 
 /**
@@ -241,20 +348,8 @@ function normalizeAnswer(value: string): string {
     .trim();
 }
 
-/**
- * `customerCount` decides the pricing tier the estimate is built on («أول 10
- * زبائن»). It defaults to the launch constant; the page will pass the live count
- * once it comes from the database.
- */
-export function AssistantChat({
-  locale,
-  intent,
-  customerCount = CLIENTS_COUNTED_SO_FAR,
-}: {
-  locale: Locale;
-  intent?: string;
-  customerCount?: number;
-}) {
+/** Service-request chat using the fixed public pricing table. */
+export function AssistantChat({ locale, intent }: { locale: Locale; intent?: string }) {
   const ar = locale === "ar";
   const copy = dictionaries[locale].assistant;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -369,7 +464,7 @@ export function AssistantChat({
 
   // The service-request exchange is displayed, not saved: the welcome sits after the message that was last when the
   // request started, and each answer (with the question that follows it) after the message that was last when it was chosen.
-  const visibleMessages = serviceRequest ? withServiceRequest(messages, serviceRequest, locale, customerCount) : messages;
+  const visibleMessages = serviceRequest ? withServiceRequest(messages, serviceRequest, locale) : messages;
   const pendingQuestion = serviceRequest && isQuestionStep(serviceRequest.step) ? SERVICE_REQUEST_QUESTIONS[serviceRequest.step] : null;
 
   const quickReplies = ar
@@ -385,7 +480,7 @@ export function AssistantChat({
           <span className="chat-encrypted"><span>◇</span>{ar ? "محادثة خاصة" : "Private chat"}</span>
         </div>
 
-        {intent === "service_request" && <div className="chat-context-note">{ar ? "ابدأ بوصف الخدمة أو النتيجة التي تبحث عنها. لا تحتاج إلى تعبئة نموذج طويل." : "Describe the service or outcome you need. There is no long form to complete."}</div>}
+        {intent === "service_request" && <div className="chat-context-note">{ar ? "راح نسألك كم سؤال سريع حتى نفهم مشروعك ونحسب تقديراً واضحاً." : "Answer a few quick questions so we can understand your business and give a clear estimate."}</div>}
         {ready && <div className="chat-provider-note"><span>i</span>{providerAvailable ? (ar ? "المساعد متصل بمزودي الذكاء الاصطناعي (Groq، Gemini، Cohere وغيرها). قد تُرسل رسائل المحادثة إلى المزود لتوليد الرد، ونعود إلى الردود المحلية إذا تعذّرت الخدمة. لا تشارك كلمات مرور أو بيانات دفع." : "The assistant is connected to AI providers (Groq, Gemini, Cohere and others). Conversation messages may be sent to a provider for generation, with local replies as a fallback. Do not share passwords or payment details.") : copy.providerOff}</div>}
         {escalated && <div className="chat-escalation-note" role="status"><span>✔</span>{ar ? "تم تحويل محادثتك إلى فريق أفق البشري: أُنشئ تنبيه في لوحة الوكالة وتم إشعار المالك. سيتواصل معك أحد أعضاء الفريق." : "Your conversation has been handed over to the Ofoq human team: an alert was created in the agency control room and the owner was notified. A team member will contact you."}</div>}
         {error && <div className="form-notice form-notice-error chat-error" role="alert">{error}</div>}
@@ -480,9 +575,10 @@ function readServiceRequest(): ServiceRequestContext | null {
       const answer = answers[SERVICE_REQUEST_QUESTIONS[expected].answerKey];
       return event?.step === expected && SERVICE_REQUEST_QUESTIONS[expected].options.some((option) => option.id === answer);
     });
-    return consistent
-      ? { ...stored, step, answers, answerLog }
-      : { ...stored, step: "TYPE", answers: {}, answerLog: [] };
+    if (consistent) return { ...stored, step, answers, answerLog };
+    const reset = { ...stored, step: "TYPE" as const, answers: {}, answerLog: [] };
+    saveServiceRequest(reset);
+    return reset;
   } catch {
     return null;
   }
@@ -500,7 +596,6 @@ function withServiceRequest(
   messages: ChatMessage[],
   context: ServiceRequestContext,
   locale: Locale,
-  customerCount: number,
 ): ChatMessage[] {
   const entries: Array<{ afterMessageId: string | null; message: ChatMessage }> = [
     { afterMessageId: context.afterMessageId, message: { id: SERVICE_REQUEST_WELCOME_ID, sender: "ASSISTANT", body: SERVICE_REQUEST_WELCOME[locale], language: locale, createdAt: context.startedAt } },
@@ -514,14 +609,14 @@ function withServiceRequest(
     );
   }
   if (isServiceRequestComplete(context.answers)) {
-    // Anchored to the BUDGET answer, i.e. displayed right after the summary.
+    // Anchored to the TARGETING answer, i.e. displayed right after the summary.
     const last = context.answerLog[context.answerLog.length - 1];
     entries.push({
       afterMessageId: last ? last.afterMessageId : context.afterMessageId,
       message: {
         id: SERVICE_REQUEST_ESTIMATE_ID,
         sender: "ASSISTANT",
-        body: serviceRequestEstimate(context.answers, locale, customerCount),
+        body: serviceRequestEstimate(context.answers, locale),
         language: locale,
         createdAt: last ? last.answeredAt : context.startedAt,
       },
