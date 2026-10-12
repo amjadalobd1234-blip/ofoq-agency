@@ -351,3 +351,150 @@ nextStep: '… Reload the schema cache … Reading: public.users (id, name, emai
 | `src/middleware.ts` | `/api/debug/:path*` و`/api/email/:path*` |
 | `tests/admin-alerts-session.test.ts` (جديد) | 5 اختبارات: البرهان على مرور `Bearer`، الكوكي المجزّأ، التفاصيل والإجراءات، التجديد، و401 |
 | `tests/admin-alert-diagnostics.test.ts` | اختبار حرس الـ middleware + ثلاث حالات لسطر `[admin-alerts]` (بلا جلسة، فشل قراءة الملف الشخصي، فشل الـ RPC) |
+
+---
+
+## ١٠. الجولة الثالثة (2026-10-12): زر «إرسال الرد» — لماذا لم يستجب، وكيف صار يستجيب
+
+> العَرَض: صفحة تفاصيل التنبيه تفتح كاملة ✅ لكن زر **«إرسال الرد»** لا يُظهر أي استجابة،
+> وكذلك زر **«تم الحل»**.
+
+### ١٠.١ نتيجة الفحص (ما كان موجودًا فعلًا)
+
+| السؤال | النتيجة |
+| --- | --- |
+| هل `src/app/api/admin/alerts/[id]/reply/route.ts` موجود؟ | **لا**. لم يكن هناك مسار مخصّص للرد؛ كان الرد يُنفَّذ عبر `POST /api/admin/alerts/[id]` بحمولة `{ action: "reply", body, language }`. |
+| هل أسماء الوسائط في الكود مطابقة لتعريف الدالة؟ | **نعم.** الكود يرسل `{ p_alert_id, p_body, p_language }` و`0007_admin_alerts.sql` تُعرّف `ofoq_admin_reply_to_client(p_alert_id text, p_body text, p_language text DEFAULT 'ar')` — لا اختلاف في الأسماء، ولا `p_conversation_id`. |
+| هل الدالة تتعامل مع المحادثة؟ | الدالة تأخذ `p_alert_id` وتستخرج `entity_id` (وهو `conversation_id`) بنفسها: التصعيد يُنشئ التنبيه بـ `entity_type='conversation'` و`entity_id=<conversation id>`. لذلك لا حاجة لأي وسيط باسم `p_conversation_id`. |
+| أين كانت المشكلة إذًا؟ | في ثلاث نقاط مجتمعة: (1) كنّـا ننتظر أنّ الزر لا يستجيب لأن النتيجة تظهر في **أعلى الصفحة** بعيدًا عن الزر؛ (2) إذا رجع الـ API خطأً (مثلًا `PGRST202` لأن الدالة غير مكشوفة على المشروع) فإن الزر يبدو ميتًا؛ (3) الكتابة تُمسح فقط بعد النجاح لكن **لا يوجد أي تأكيد قريب** من الزر يقول «تم الإرسال بنجاح». |
+
+باختصار: الكود كان سليمًا، والتجربة لم تكن تُظهر نتيجة الفعل. لذلك صار لكل زر مسار خاص، وتأكيد/خطأ **داخل نفس البطاقة**.
+
+### ١٠.٢ المسارات الجديدة (نقطة نهاية لكل زر)
+
+```text
+POST /api/admin/alerts/[id]/reply
+     Body: { "body": "…", "language": "ar" | "en" }
+     يقبل كذلك: { "message": … }  |  { "text": … }  |  { "p_body": …, "p_language": … }
+     200 → { "data": <ofoq_admin_alert_details payload> }   ← الرسالة الجديدة تظهر بلا إعادة تحميل
+     400 → { "error": …, "code": "INVALID_REPLY_BODY" } | { "code": "INVALID_ALERT_ID" }
+     401 → AUTH_REQUIRED   403 → الدور ليس OWNER/PARTNER
+     503 → RPC_NOT_INSTALLED (معه hint ورابط /api/debug/alerts)
+
+POST /api/admin/alerts/[id]/resolve
+     Body: { "note": "…" }        ← اختياري، بحد 2000 حرف
+     200 → { "data": <…> }  حيث status = RESOLVED
+```
+
+`POST /api/admin/alerts/[id]` بالصيغة القديمة `{ action: … }` **ما زال يعمل** كي لا تتعطّل نافذة
+متصفح محمّلة سابقًا بعد النشر؛ والأمران يمرّان بنفس البوابة ونفس التسجيل.
+
+### ١٠.٣ ما تغيّر في الواجهة
+
+- الرد صار داخل `<form onSubmit={…}>` والزر `type="submit"`، وكذلك «تم الحل» — فاضغط Enter أو الزر.
+- **تأكيد النجاح** يظهر داخل البطاقة: «✓ تم الإرسال بنجاح» / «✓ تم الحل بنجاح» (`role="status"`).
+- **الخطأ** يظهر أيضًا داخل البطاقة مع الرمز ومعرّف الطلب ورابط التشخيص (`role="alert"`)، والنصّ
+  المكتوب **لا يُمسح** عند الفشل.
+- خانة الرد تُمسح **فقط** بعد نجاح الـ RPC.
+- «تم الحل» يعيد رسم الصفحة من حمولة الـ RPC: الحالة تصبح RESOLVED، وتظهر ملاحظة «تم إغلاق التنبيه».
+
+### ١٠.٤ التحقق من أسماء الوسائط على مشروعك (بدون سجلات)
+
+`GET /api/debug/alerts` صار يفحص **أزرار الكتابة** فعليًا:
+
+- `actionProbes.reply` و`actionProbes.resolve`: كل واحد يُنادى بمعرّف تنبيه مستحيل
+  (`00000000-0000-0000-0000-000000000000`)، فيكون الجواب:
+  - `ready` (الرمز `P0002`) → أسماء الوسائط صحيحة والدالة تصل وتعمل، ولم يُكتب أي صف.
+  - `not_exposed` (`PGRST202`/`42883`) → هذه هي علّة الزر، ومعها الأمر الجاهز.
+  - `permission_denied` (`42501`) → منح `EXECUTE` ناقص.
+- `replyability`: يشرح لماذا قد يكون الزر معطّلًا: `no_conversation` (التنبيه غير مرتبط بمحادثة)
+  أو `resolved` (التنبيه مُغلق).
+- `sql.signatures` نفس أمر `pg_get_function_arguments` الجاهز للنسخ.
+
+وللتحقق يدويًا في SQL Editor (المطلوب حرفيًا):
+
+```text
+ofoq_admin_reply_to_client(text,text,text) | p_alert_id text, p_body text, p_language text
+ofoq_admin_resolve_alert(text,text)         | p_alert_id text, p_note text
+```
+
+### ١٠.٥ إثبات أن الزر يعمل فعلًا (اختبار E2E)
+
+`tests/admin-alert-reply-e2e.test.tsx` يشغّل **المكوّن الحقيقي** في DOM، ويوجّه `fetch` إلى
+**معالجات المسارات الحقيقية**، وتلك تتكلم مع خادم HTTP صغير يلعب دور PostgREST — بما في ذلك قاعدة
+مطابقة **أسماء الوسائط** نفسها. الاختبارات:
+
+| الفحص | النتيجة |
+| --- | --- |
+| كتابة رد ثم الضغط على «إرسال الرد» | `POST /rest/v1/rpc/ofoq_admin_reply_to_client` بـ `{ p_alert_id, p_body, p_language }` و`Authorization: Bearer <جلسة الموظف>` |
+| الرسالة المحفوظة | صف بجانب `sender_type='STAFF'` وبالنص المكتوب نفسه |
+| الواجهة بعد النجاح | «تم الإرسال بنجاح» + مسح الخانة |
+| «تم الحل» | `POST …/rpc/ofoq_admin_resolve_alert` بـ `{ p_alert_id, p_note }` ثم RESOLVED |
+| دالة مثبّتة بأسماء وسائط أخرى | بطاقة خطأ داخل البطاقة (`RPC_NOT_INSTALLED` + `/api/debug/alerts`) والنص **يبقى** في الخانة |
+| الحزمة القديمة `{ action: "reply" }` | ما زالت تعمل وتُرسل الأسماء الثلاثة الصحيحة |
+| «تأكيد المتابعة» | ينتقل التنبيه إلى ACKNOWLEDGED ويظهر التأكيد أعلى البطاقة |
+
+### ١٠.٦ إثبات على قاعدة بيانات حقيقية (PostgreSQL)
+
+`tests/admin-alert-sql-execution.test.ts` يشغّل **PostgreSQL 18 حقيقيًا** (PGlite داخل Node) ويُنفّذ
+**نفس SQL الموجود في المستودع**: جداول `docs/setup/supabase-setup.sql`، ودوال `ofoq_admin_*` مقتطعة
+منه حرفيًا. ما ثبت:
+
+| الفحص | النتيجة |
+| --- | --- |
+| `pg_get_function_arguments` لـ `ofoq_admin_reply_to_client` | `p_alert_id text, p_body text, p_language text` |
+| لـ `ofoq_admin_resolve_alert` | `p_alert_id text, p_note text` |
+| نداء بأسماء مختلفة (`p_conversation_id => …`) | يفشل بالرمز **42883** وهذه علّة «الزر لا يستجيب» إن حدثت لمشروع ما |
+| نداء بالأسماء الصحيحة | صف في `public.messages` بـ `sender_type='STAFF'` و`sender_user_id = auth.uid()` و`meta` يحمل `admin-alert-centre` و`alertId` |
+| أثر الرد على المحادثة | `status='OPEN'`، `unread_for_client` +1، `unread_for_staff = 0`، وتحديث `last_message_at` |
+| التنبيه الجديد | يصبح `ACKNOWLEDGED` + سجل `alert.replied_to_client` |
+| الرد لا يذهب لمحادثة أخرى | ✅ صفر صفوف في محادثة تنبيه آخر |
+| «تم الحل» | `status='RESOLVED'` + السجل `alert.resolved` يحفظ الملاحظة، وإعادة الحل لا تُكرر السجل |
+| جلسة غير موظف | `42501` ولا كتابة |
+| الـ probe بمعرّف التنبيه المستحيل | `P0002` (نسخة الرد: `Alert is not linked to a client conversation`، ونسخة الحل: `Alert not found`) و**صفر كتابة** |
+| حمولة التفاصيل | تُعيد رسالة `STAFF` الأخيرة و`conversation` و`activities` — نفس ما تعرضه الصفحة |
+
+### ١٠.٧ التشغيل محليًا
+
+```bash
+npx vitest run tests/admin-alert-reply-e2e.test.tsx    # 6 اختبارات (E2E: مكوّن → مسار → PostgREST)
+npx vitest run tests/admin-alert-sql-execution.test.ts # 8 اختبارات (PostgreSQL حقيقي)
+npx vitest run tests/admin-alert-action-routes.test.ts # 11 اختبارًا (بروتوكول المسارين + التشخيص)
+npx vitest run tests/admin-alert-probes.test.ts        # 7 اختبارات (منطق الـ probes)
+```
+
+### ١٠.٨ الملفات المتغيرة في هذه الجولة
+
+| الملف | التغيير |
+| --- | --- |
+| `src/app/api/admin/alerts/[id]/reply/route.ts` (جديد) | مسار إرسال الرد: `{ body, language }` → `ofoq_admin_reply_to_client` مع رموز 400/401/403/503 واضحة |
+| `src/app/api/admin/alerts/[id]/resolve/route.ts` (جديد) | مسار «تم الحل»: `{ note? }` → `ofoq_admin_resolve_alert` |
+| `src/lib/admin/alert-route-guard.ts` (جديد) | البوابة والتسجيل المشتركان لكل مسارات التنبيهات (`requireStaffAccess`, `failAlertRequest`, ثوابت `ALERT_ACTION_RPC`) |
+| `src/lib/admin/alert-action-probes.ts` (جديد) | منطق الـ probes (نداء بمعرّف مستحيل) + `verdictForReplyability` |
+| `src/app/api/admin/alerts/[id]/route.ts` | يستخدم البوابة المشتركة، ورموز الأخطاء صارت دقيقة (`INVALID_ACTION`, `INVALID_REPLY_BODY`, …) |
+| `src/app/api/debug/alerts/route.ts` | يضيف `actionProbes` و`replyability` وخطوات تالية تسمّي الزر الفاشل |
+| `src/components/admin-alert-detail.tsx` | نماذج `onSubmit` ونقاط نهائية لكل زر + تأكيد/خطأ داخل البطاقة + مسح الخانة بعد النجاح فقط |
+| `src/app/globals.css` | أنماط `.admin-action-feedback` و`.admin-action-error` و`.admin-acknowledge-control` |
+| `vitest.config.ts` | تشمل الاختبارات `.test.tsx` وتُفعّل JSX runtime التلقائي (لاختبارات المكوّنات) |
+| `tests/admin-alert-reply-e2e.test.tsx` (جديد) | 6 اختبارات E2E: كتابة→ضغط→تأكيد→رسالة STAFF، والحل، والمتابعة، وحالة فشل الدالة |
+| `tests/admin-alert-action-routes.test.ts` (جديد) | 11 اختبارًا: أسماء الوسائط على الشبكة، الحدود، الجلسة، والتصنيفات |
+| `tests/admin-alert-probes.test.ts` (جديد) | 7 اختبارات: منطق الـ probes وكونه بلا كتابة، وقاعدة تعطيل زر الرد |
+| `tests/admin-alert-sql-execution.test.ts` (جديد) | 8 اختبارات على PostgreSQL 18 حقيقي: التوقيعات، ورسالة `STAFF` فعلية، والحل، والـ probes |
+| `tests/helpers/api-bridge.ts` (جديد) | يوجّه `fetch` في الاختبارات إلى معالجات المسارات الحقيقية مع كوكي الجلسة |
+| `tests/admin-alert-diagnostics.test.ts` | اختبار الحرس صار يغطي المسارين الجديدين والبواية المشتركة |
+
+### ١٠.٩ قائمة تحقق سريعة بعد النشر
+
+1. افتح `/api/debug/alerts` وأنت مسجّل: تأكد أن `actionProbes.reply.status = "ready"`.
+2. افتح تنبيهًا، اكتب ردًا، اضغط «إرسال الرد» → يجب أن تظهر «✓ تم الإرسال بنجاح» أسفل الزر.
+3. تحقق في Supabase SQL Editor:
+
+```sql
+SELECT sender_type, left(body, 60) AS body, created_at
+FROM public.messages
+WHERE conversation_id = '<conversation id>'
+ORDER BY created_at DESC
+LIMIT 5;
+```
+
+يجب أن ترى صفًا بـ `sender_type = 'STAFF'`.

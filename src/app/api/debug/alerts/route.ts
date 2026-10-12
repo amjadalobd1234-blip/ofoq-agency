@@ -1,4 +1,12 @@
 import { ALERT_RPC_EXPECTATIONS, allAlertRpcsExposed, verifyAlertRpcs } from "@/lib/admin/alert-rpc-contract";
+import {
+  ACTION_PROBE_ALERT_ID,
+  PROBED_ACTIONS,
+  interpretActionProbe,
+  probeArguments,
+  verdictForReplyability,
+  type ActionProbeVerdict,
+} from "@/lib/admin/alert-action-probes";
 import { getSupabaseAuthStorageKey, getSupabaseConfig } from "@/lib/supabase/config";
 import { fetchRestSurface } from "@/lib/supabase/postgrest-introspection";
 import { diagnoseRpcFailure, newRequestId, type PostgrestErrorLike } from "@/lib/supabase/rpc-diagnostics";
@@ -27,6 +35,13 @@ export const dynamic = "force-dynamic";
  *      the signed-in user)?
  *   3. does `ofoq_admin_alert_details` actually return data for a real alert of
  *      this project — with the raw PostgREST error when it does not.
+ *   4. can the WRITE buttons on that page actually reach the database? Both
+ *      actions are probed with an alert id that cannot exist, so the answer is
+ *      «P0002 = the argument names resolve correctly» or «PGRST202 = they do
+ *      not» — without writing a single row.
+ *   5. would the reply composer be enabled for this alert? The same rule the
+ *      component applies (`conversation != null && status !== 'RESOLVED'`) is
+ *      reported as `replyability`, so a greyed-out button is explained.
  *
  * No secret leaves the process: cookie values and tokens are never included,
  * only names, sizes and the token's non-secret claims (project ref, role, exp).
@@ -56,7 +71,16 @@ export async function GET(request: Request): Promise<Response> {
     configRef: auth.session?.projectRef.fromConfigUrl ?? null,
   });
 
-  const ok = surface.ok && allAlertRpcsExposed(rpcs) && (!probe.attempted || probe.ok);
+  // Both write actions, probed against a nil alert id: nothing can be written,
+  // and the answer distinguishes «argument names are wrong» from «not staff».
+  const actionProbes = await probeWriteActions(auth);
+  const replyability = probe.attempted && probe.ok ? verdictForReplyability(probe.details) : null;
+
+  const ok =
+    surface.ok &&
+    allAlertRpcsExposed(rpcs) &&
+    (!probe.attempted || probe.ok) &&
+    actionProbes.every((verdict) => verdict.status === "ready" || verdict.status === "rejected_input");
 
   console.log("[alerts-debug] GET /api/debug/alerts", {
     requestId,
@@ -68,6 +92,7 @@ export async function GET(request: Request): Promise<Response> {
     probeAlertId: probe.alertId,
     probeOk: probe.attempted ? probe.ok : null,
     probeCode: probe.error?.code ?? null,
+    actionProbeStatus: actionProbes.map((verdict) => `${verdict.action}:${verdict.status}`),
   });
 
   return jsonWithSession(
@@ -105,7 +130,15 @@ export async function GET(request: Request): Promise<Response> {
       expectedSignatures,
       rpcs,
       probe,
-      nextSteps: buildNextSteps(rpcs, surface.ok, probe, auth.session?.notes ?? []),
+      // «Why does nothing happen when I press Send?» — answered for both buttons.
+      actionProbes: {
+        probeAlertId: ACTION_PROBE_ALERT_ID,
+        written: false,
+        reply: actionProbes.find((verdict) => verdict.action === "reply") ?? null,
+        resolve: actionProbes.find((verdict) => verdict.action === "resolve") ?? null,
+      },
+      replyability,
+      nextSteps: buildNextSteps(rpcs, surface.ok, probe, actionProbes, auth.session?.notes ?? []),
       sql: {
         signatures: [
           "SELECT p.oid::regprocedure AS signature, pg_get_function_arguments(p.oid) AS args,",
@@ -122,6 +155,27 @@ export async function GET(request: Request): Promise<Response> {
   );
 }
 
+/**
+ * Runs both write actions with an alert id that cannot exist.
+ *
+ * Safe by construction: `ofoq_admin_reply_to_client` and
+ * `ofoq_admin_resolve_alert` both look the alert up before touching
+ * `public.messages`, `public.conversations` or `public.activities`, and the nil
+ * id matches no row — so the probe ends in P0002 and writes nothing. A
+ * signature PostgREST cannot resolve answers PGRST202 first, which is exactly
+ * the verdict the diagnostics page needs.
+ */
+async function probeWriteActions(auth: Awaited<ReturnType<typeof requireSupabaseUser>>): Promise<ActionProbeVerdict[]> {
+  if (!("client" in auth) || !auth.client) return [];
+  const verdicts: ActionProbeVerdict[] = [];
+  for (const action of PROBED_ACTIONS) {
+    const rpc = action === "reply" ? "ofoq_admin_reply_to_client" : "ofoq_admin_resolve_alert";
+    const { error } = await auth.client.rpc(rpc, probeArguments(action, ACTION_PROBE_ALERT_ID) as never);
+    verdicts.push(interpretActionProbe(action, error ?? null));
+  }
+  return verdicts;
+}
+
 async function probeAlertDetails(
   auth: Awaited<ReturnType<typeof requireSupabaseUser>>,
   requestedId: string | null,
@@ -134,9 +188,11 @@ async function probeAlertDetails(
   error: PostgrestErrorLike | null;
   diagnosis: { kind: string; code: string; explanation: string; hint: string } | null;
   returnedAlertKeys: string[] | null;
+  /** The RPC payload, so replyability can be decided from the same data. */
+  details: unknown;
 }> {
   if (!("client" in auth) || !auth.client) {
-    return { attempted: false, ok: false, alertId: null, persona: null, error: null, diagnosis: null, returnedAlertKeys: null };
+    return { attempted: false, ok: false, alertId: null, persona: null, error: null, diagnosis: null, returnedAlertKeys: null, details: null };
   }
 
   let alertId = requestedId?.trim() || null;
@@ -154,6 +210,7 @@ async function probeAlertDetails(
         error: listed.error,
         diagnosis: { kind: diagnosis.kind, code: diagnosis.code, explanation: diagnosis.explanation, hint: diagnosis.hint },
         returnedAlertKeys: null,
+        details: null,
       };
     }
     const items = (listed.data as { items?: Array<{ id?: unknown }> } | null)?.items;
@@ -173,6 +230,7 @@ async function probeAlertDetails(
           hint: "Raise one escalation from /chat (or pass ?alertId=<uuid> explicitly), then reload this report.",
         },
         returnedAlertKeys: null,
+        details: null,
       };
     }
   }
@@ -188,6 +246,7 @@ async function probeAlertDetails(
       error,
       diagnosis: { kind: diagnosis.kind, code: diagnosis.code, explanation: diagnosis.explanation, hint: diagnosis.hint },
       returnedAlertKeys: null,
+      details: null,
     };
   }
 
@@ -201,6 +260,7 @@ async function probeAlertDetails(
     error: null,
     diagnosis: null,
     returnedAlertKeys: data && typeof data === "object" ? Object.keys(data as Record<string, unknown>) : null,
+    details: data ?? null,
   };
 }
 
@@ -208,6 +268,7 @@ function buildNextSteps(
   rpcs: ReturnType<typeof verifyAlertRpcs>,
   surfaceOk: boolean,
   probe: { attempted: boolean; ok: boolean; diagnosis: { hint: string } | null },
+  actionProbes: ActionProbeVerdict[],
   sessionNotes: string[],
 ): string[] {
   const steps: string[] = [];
@@ -219,6 +280,9 @@ function buildNextSteps(
     if (verdict.status === "signature_mismatch") {
       steps.push(`${verdict.name}: installed as (${verdict.installedArgs.join(", ") || "no arguments"}) but the app calls it with (${verdict.expectedArgs.join(", ")}) — drop the old overload and re-apply the migration.`);
     }
+  }
+  for (const verdict of actionProbes) {
+    if (verdict.status !== "ready") steps.push(`${verdict.action}: ${verdict.hint}`);
   }
   if (sessionNotes.length > 0) steps.push(...sessionNotes);
   if (probe.attempted && probe.diagnosis) steps.push(probe.diagnosis.hint);

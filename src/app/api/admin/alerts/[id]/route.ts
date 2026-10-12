@@ -1,21 +1,23 @@
-import { logAdminAlertFailure, logAdminAlertGateFailure } from "@/lib/admin/alert-route-log";
-import { getSupabaseConfig } from "@/lib/supabase/config";
-import { jsonWithSession } from "@/lib/supabase/route-response";
 import {
-  requireOwnRole,
-  requireSupabaseUser,
-  rpcFailureResponse,
-  type PostgrestErrorLike,
-  type ProfileFailureReason,
-  type SupabaseProfile,
-  type SupabaseSessionAuth,
-} from "@/lib/supabase/route-auth";
+  ALERT_ACTION_RPC,
+  failAlertRequest,
+  invalidActionResponse,
+  invalidAlertIdResponse,
+  isRecord,
+  readAlertId,
+  readLanguage,
+  readText,
+  requireStaffAccess,
+} from "@/lib/admin/alert-route-guard";
+import { jsonWithSession } from "@/lib/supabase/route-response";
+import type { PostgrestErrorLike } from "@/lib/supabase/route-auth";
+
 export const dynamic = "force-dynamic";
 
 const ROUTE = "GET /api/admin/alerts/[id]";
+const ACTION_ROUTE = "POST /api/admin/alerts/[id]";
 
 type RouteContext = { params: Promise<{ id: string }> };
-type AlertAction = "acknowledge" | "resolve" | "reply";
 
 /**
  * GET /api/admin/alerts/:id — the complete alert, client and conversation context.
@@ -28,17 +30,18 @@ type AlertAction = "acknowledge" | "resolve" | "reply";
  * and docs/ADMIN-ALERTS-AR.md.
  */
 export async function GET(request: Request, context: RouteContext) {
-  const access = await requireStaff(request, "details");
+  const access = await requireStaffAccess(request, ROUTE, "details");
   if (access.response) return access.response;
 
-  const alertId = await getAlertId(context);
-  if (!alertId) return invalidRequestResponse();
+  const alertId = await readAlertId(context);
+  if (!alertId) return invalidAlertIdResponse();
 
   const { data, error } = await access.auth.client.rpc("ofoq_admin_alert_details", { p_alert_id: alertId });
   if (error) {
     return failAlertRequest(error, {
       auth: access.auth,
       profile: access.profile,
+      route: ROUTE,
       action: "details",
       rpc: "ofoq_admin_alert_details",
       alertId,
@@ -53,19 +56,34 @@ export async function GET(request: Request, context: RouteContext) {
 /**
  * POST /api/admin/alerts/:id
  *
+ * The original one-endpoint form of every action:
+ *
+ *   { "action": "acknowledge" }
+ *   { "action": "resolve",  "note": "…" }
+ *   { "action": "reply",    "body": "…", "language": "ar" | "en" }
+ *
+ * The dedicated routes (`…/[id]/reply`, `…/[id]/resolve`) are the ones the staff
+ * page now calls, but this stays supported so a browser tab that loaded the old
+ * bundle keeps working after a deploy. All three run the same guard, the same
+ * RPCs and the same logging.
+ *
  * The browser never writes alerts/messages directly. Every action is sent to a
  * narrowly scoped SECURITY DEFINER RPC that records the responsible staff user.
  */
 export async function POST(request: Request, context: RouteContext) {
-  const gate = await requireStaff(request, "action");
-  if (gate.response) return gate.response;
-  const access = gate;
+  const access = await requireStaffAccess(request, ACTION_ROUTE, "action");
+  if (access.response) return access.response;
 
-  const alertId = await getAlertId(context);
-  if (!alertId) return invalidRequestResponse();
+  const alertId = await readAlertId(context);
+  if (!alertId) return invalidAlertIdResponse();
 
   const payload = await request.json().catch(() => null);
-  if (!isRecord(payload) || !isAction(payload.action)) return invalidRequestResponse();
+  if (!isRecord(payload) || !isAction(payload.action)) {
+    return invalidActionResponse(
+      "The alert action is invalid. Send { action: \"acknowledge\" } | { action: \"resolve\", note? } | { action: \"reply\", body, language? }.",
+      "INVALID_ACTION",
+    );
+  }
 
   let data: unknown;
   let error: PostgrestErrorLike | null;
@@ -73,12 +91,14 @@ export async function POST(request: Request, context: RouteContext) {
   let args: Record<string, string> = { p_alert_id: "<alert id>" };
 
   if (payload.action === "acknowledge") {
-    rpc = "ofoq_admin_acknowledge_alert";
+    rpc = ALERT_ACTION_RPC.acknowledge.rpc;
     ({ data, error } = await access.auth.client.rpc("ofoq_admin_acknowledge_alert", { p_alert_id: alertId }));
   } else if (payload.action === "resolve") {
     const note = readText(payload.note, 2_000);
-    if (note === undefined) return invalidRequestResponse();
-    rpc = "ofoq_admin_resolve_alert";
+    if (note === undefined) {
+      return invalidActionResponse("The resolution note is too long. It must be 2000 characters or fewer.", "INVALID_RESOLUTION_NOTE");
+    }
+    rpc = ALERT_ACTION_RPC.resolve.rpc;
     args = { p_alert_id: "<alert id>", p_note: note ? `<note ${note.length} chars>` : "<empty>" };
     ({ data, error } = await access.auth.client.rpc("ofoq_admin_resolve_alert", {
       p_alert_id: alertId,
@@ -86,9 +106,11 @@ export async function POST(request: Request, context: RouteContext) {
     }));
   } else {
     const body = readText(payload.body, 5_000);
-    const language = payload.language === "en" ? "en" : "ar";
-    if (!body) return invalidRequestResponse();
-    rpc = "ofoq_admin_reply_to_client";
+    const language = readLanguage(payload.language);
+    if (!body) {
+      return invalidActionResponse("Write the reply before sending it. It must contain between 1 and 5000 characters.", "INVALID_REPLY_BODY");
+    }
+    rpc = ALERT_ACTION_RPC.reply.rpc;
     args = { p_alert_id: "<alert id>", p_body: `<reply ${body.length} chars>`, p_language: language };
     ({ data, error } = await access.auth.client.rpc("ofoq_admin_reply_to_client", {
       p_alert_id: alertId,
@@ -101,6 +123,7 @@ export async function POST(request: Request, context: RouteContext) {
     return failAlertRequest(error, {
       auth: access.auth,
       profile: access.profile,
+      route: ACTION_ROUTE,
       action: payload.action,
       rpc,
       alertId,
@@ -111,155 +134,6 @@ export async function POST(request: Request, context: RouteContext) {
   return jsonWithSession(access.auth, { data });
 }
 
-interface StaffAccess {
-  auth: SupabaseSessionAuth;
-  profile: SupabaseProfile;
-  response?: never;
-}
-
-/**
- * The staff gate in front of every handler of this route.
- *
- * Both refusal paths are logged here, in the same `[admin-alerts]` shape the RPC
- * failures use, so the host's function logs always explain what the page shows:
- * a missing session, a profile row that could not be read, a non-staff account.
- */
-async function requireStaff(
-  request: Request,
-  action: string,
-): Promise<StaffAccess | { auth?: never; profile?: never; response: Response }> {
-  const auth = await requireSupabaseUser(request);
-  if (auth.response) {
-    logAdminAlertGateFailure({ request, route: ROUTE, action, reason: "auth_required" });
-    return { response: auth.response };
-  }
-
-  const role = await requireOwnRole(auth.client, auth.user.id, ["OWNER", "PARTNER"], { requestId: auth.requestId });
-  if (role.response) {
-    logAdminAlertGateFailure({
-      request,
-      route: ROUTE,
-      action,
-      auth: { userId: auth.user.id, userEmail: auth.user.email ?? null, requestId: auth.requestId, session: auth.session },
-      reason: role.reason as ProfileFailureReason,
-      error: role.error ?? null,
-    });
-    return { response: role.response };
-  }
-
-  return { auth, profile: role.profile };
-}
-
-async function getAlertId(context: RouteContext): Promise<string | null> {
-  const { id } = await context.params;
-  const value = id?.trim();
-  return value && value.length <= 200 ? value : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isAction(value: unknown): value is AlertAction {
+function isAction(value: unknown): value is "acknowledge" | "resolve" | "reply" {
   return value === "acknowledge" || value === "resolve" || value === "reply";
-}
-
-/** Returns a trimmed string or undefined when it is not valid user input. */
-function readText(value: unknown, maxLength: number): string | undefined {
-  if (value === undefined || value === null) return "";
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed.length <= maxLength ? trimmed : undefined;
-}
-
-function invalidRequestResponse(): Response {
-  return Response.json(
-    { error: "The alert action is invalid.", code: "INVALID_INPUT" },
-    { status: 400, headers: { "Cache-Control": "no-store" } },
-  );
-}
-
-/**
- * One line that answers, without another deploy, «why did this staff action
- * fail?»:
- *
- * - `session`            → which cookies arrived, whether the expected session
- *                          cookie was there, what project the token is for,
- *                          and whether that matches NEXT_PUBLIC_SUPABASE_URL
- * - `rpcError`           → the complete PostgREST error (code/message/details/hint)
- * - `explanation/nextStep` (from rpcFailureResponse) → the classified cause and
- *                          the exact SQL or setting to change
- *
- * Never logged: cookie values, tokens, message bodies or row data.
- */
-function failAlertRequest(
-  error: PostgrestErrorLike,
-  context: {
-    auth: SupabaseSessionAuth;
-    profile: SupabaseProfile;
-    action: string;
-    rpc: string;
-    alertId: string;
-    /** Argument NAMES with placeholders — never the message text of a note or reply. */
-    args: Record<string, string>;
-    /** The incoming request, so the log can report the session it carried. */
-    request: Request;
-  },
-): Response {
-  const { auth, profile } = context;
-  const config = getSupabaseConfig();
-  // The one line to grep for — same shape as every other admin-alerts failure.
-  logAdminAlertFailure({
-    request: context.request,
-    route: ROUTE,
-    action: context.action,
-    reason: "rpc",
-    requestId: auth.requestId,
-    userId: auth.user.id,
-    userEmail: auth.user.email ?? null,
-    userRole: profile.role,
-    session: auth.session,
-    rpc: context.rpc,
-    rpcArgs: { ...context.args, alertId: context.alertId },
-    rpcError: error,
-    note: `supabaseHost=${config ? safeHost(config.url) : "unconfigured"}`,
-  });
-  // eslint-disable-next-line no-console
-  console.error(`[api/admin/alerts] ${context.action} RPC failed`, {
-    requestId: auth.requestId,
-    action: context.action,
-    alertId: context.alertId,
-    rpc: context.rpc,
-    rpcArgs: context.args,
-    userId: auth.user.id,
-    userEmail: auth.user.email,
-    userRole: profile.role,
-    userStatus: profile.status,
-    supabaseHost: config ? safeHost(config.url) : null,
-    session: auth.session,
-    rpcError: {
-      code: error.code ?? null,
-      message: error.message ?? null,
-      details: error.details ?? null,
-      hint: error.hint ?? null,
-    },
-  });
-
-  return rpcFailureResponse(error, {
-    rpc: context.rpc,
-    args: context.args,
-    sessionProjectRef: auth.session?.projectRef.fromSession ?? null,
-    configProjectRef: auth.session?.projectRef.fromConfigUrl ?? null,
-    exposeHint: true,
-    requestId: auth.requestId,
-  });
-}
-
-/** Host only — the URL carries no secret, but the log needs one token, not a sentence. */
-function safeHost(url: string): string | null {
-  try {
-    return new URL(url).host;
-  } catch {
-    return null;
-  }
 }
