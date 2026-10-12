@@ -70,9 +70,10 @@ describe("chat opened from «اطلب خدمة جديدة» (?intent=service_req
 
     await waitFor(() => expect(shownBodies()).toEqual([greeting.body, WELCOME_AR]));
     expect(storedContext()).toMatchObject({ intent: "service_request", conversationId: "conv-1", afterMessageId: "m-greeting" });
-    // Nothing else changes for this intent: the hint note and the starter suggestions are still there.
+    // The hint note stays; the generic starter suggestions give way to the first question's options.
     expect(document.querySelector(".chat-context-note")).not.toBeNull();
-    expect(screen.getByRole("button", { name: "أريد معرفة الأسعار" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "أريد معرفة الأسعار" })).toBeNull();
+    expect(screen.getByRole("button", { name: "تصميم" })).toBeTruthy();
   });
 
   it("keeps the welcome above the client's answer, and a refresh does not ask again", async () => {

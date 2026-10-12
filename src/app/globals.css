@@ -1954,6 +1954,7 @@ button:disabled {
 .chat-quick-replies { display: flex; flex-wrap: wrap; gap: 7px; padding: 0 13px 12px; }
 .chat-quick-replies button { border: 1px solid rgba(212, 175, 55, 0.27); border-radius: 999px; background: rgba(212, 175, 55, 0.03); padding: 7px 10px; color: #c7b56d; font: inherit; font-size: 9px; cursor: pointer; }
 .chat-quick-replies button:hover { background: rgba(212, 175, 55, 0.11); }
+.chat-service-options button:disabled { opacity: 0.5; cursor: default; }
 .chat-composer { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; border-top: 1px solid var(--line-neutral); padding: 13px; }
 .chat-composer textarea { width: 100%; min-height: 43px; max-height: 110px; resize: vertical; border: 1px solid rgba(255, 255, 255, 0.13); border-radius: 4px; outline: 0; background: #0e0f0f; padding: 11px 12px; color: var(--white); font: inherit; font-size: 12px; line-height: 1.6; }
 .chat-composer textarea:focus { border-color: rgba(245, 215, 110, 0.65); }
