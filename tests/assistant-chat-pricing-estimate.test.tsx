@@ -1,29 +1,20 @@
 // @vitest-environment jsdom
-/**
- * التقدير المبدئي في المحادثة — the closing message of a guided «طلب خدمة»:
- * the price estimation the pricing agent computes from the client's answers.
- *
- * What this file pins down, in the client's own words:
- *   * an ad request shows planning ranges (impressions → visits → leads),
- *   * a design/social/content/SEO request shows a qualitative outcome instead —
- *     never invented performance numbers,
- *   * a weak budget adds the launch suggestions and still accepts the request,
- *   * the agency fee and the ad-spend split are never written anywhere in the
- *     conversation, whatever the answers are.
- */
+/** Final client-facing estimates for the guided service request. */
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AssistantChat } from "../src/components/assistant-chat";
-import { FOUNDING_BADGE } from "../src/lib/agents/pricing-agent";
+import { AssistantChat, serviceRequestEstimate } from "../src/components/assistant-chat";
 
 const STORAGE_KEY = "ofoq:chat:service-request";
-const FOUNDING_BADGE_AR = FOUNDING_BADGE.ar;
-const FOUNDING_BADGE_EN = FOUNDING_BADGE.en;
-
 interface SavedMessage { id: string; sender: string; body: string; language: string; createdAt: string }
 
-const greeting: SavedMessage = { id: "m-greeting", sender: "ASSISTANT", body: "أهلًا بك في أفق. أنا مساعد أفق، مساعد ذكي تابع للوكالة.", language: "ar", createdAt: "2026-10-12T05:00:00.000Z" };
+const greeting: SavedMessage = {
+  id: "m-greeting",
+  sender: "ASSISTANT",
+  body: "أهلًا بك في أفق. أنا مساعد أفق، مساعد ذكي تابع للوكالة.",
+  language: "ar",
+  createdAt: "2026-10-12T05:00:00.000Z",
+};
 let saved: SavedMessage[] = [];
 
 function stubChatApi(): void {
@@ -39,11 +30,6 @@ function stubChatApi(): void {
   }));
 }
 
-function shownBodies(): string[] {
-  return Array.from(document.querySelectorAll(".chat-messages .chat-message p")).map((node) => node.textContent ?? "");
-}
-
-/** The estimate message, as its own bubble. */
 function estimateBubbles(): Element[] {
   return Array.from(document.querySelectorAll(".chat-messages .chat-message-estimate"));
 }
@@ -52,8 +38,8 @@ function postCalls() {
   return vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === "POST");
 }
 
-async function openChat(locale: "ar" | "en" = "ar"): Promise<void> {
-  render(<AssistantChat locale={locale} intent="service_request" />);
+async function openChat(): Promise<void> {
+  render(<AssistantChat locale="ar" intent="service_request" />);
   await waitFor(() => expect(document.querySelectorAll(".chat-messages .chat-message").length).toBeGreaterThan(0));
 }
 
@@ -62,11 +48,20 @@ function choose(label: string): void {
 }
 
 async function answer(choices: string[]): Promise<void> {
-  for (const label of choices) {
+  for (const [index, label] of choices.entries()) {
     choose(label);
-    await waitFor(() => expect(shownBodies().length).toBeGreaterThan(1));
+    await waitFor(() => {
+      const context = JSON.parse(window.sessionStorage.getItem(STORAGE_KEY) ?? "null");
+      expect(context?.answerLog).toHaveLength(index + 1);
+    });
   }
+  await waitFor(() => expect(estimateBubbles()).toHaveLength(1));
 }
+
+const ADS_WEAK_ANSWERS = [
+  "إعلانات", "متوسط", "Instagram", "عادي (7 أيام)", "أقل من 200$",
+  "🛍️ متجر إلكتروني", "أقل من 50,000 دينار", "🇮🇶 العراق كله",
+];
 
 beforeEach(() => {
   saved = [greeting];
@@ -81,154 +76,91 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("price estimation after the guided request", () => {
-  it("shows an ads request with planning ranges and, on a weak budget, the launch suggestions — and never the internal split", async () => {
+describe("client-facing service estimate", () => {
+  it("shows the conservative ads estimate for a weak $200 budget and is transparent about the duration", async () => {
     await openChat();
-    // إعلانات · صغير · متعدد · عادي · أقل من 200$ → founding: 200×0.84 … 800×0.84
-    await answer(["إعلانات", "صغير", "متعدد", "عادي (7 أيام)", "أقل من 200$"]);
+    await answer(ADS_WEAK_ANSWERS);
 
-    const expected = [
-      "حسبت لك تقدير مبدئي على أساس إجاباتك:",
+    const body = estimateBubbles()[0]!.querySelector("p")?.textContent ?? "";
+    expect(body).toBe([
+      "ميزانيتك: $200 شهرياً 🟡",
       "",
-      "💰 السعر التقديري: 168$ – 672$",
-      "🎯 الأنسب لمشروعك: 420$",
-      "📊 تقييم الميزانية: 🟡 ضعيفة",
+      "💡 صريحين معك:",
+      "$200 تكفي لـ 16 يوم إعلان فعّال.",
       "",
-      FOUNDING_BADGE_AR,
+      "📊 النتائج المتوقعة:",
+      "• الظهور: ~8,000-15,000",
+      "• الزيارات: ~80-150",
+      "• المهتمون: ~2-4",
       "",
-      "📈 النتائج المتوقعة شهرياً (تقدير):",
-      "• الظهور: 46,700 – 86,700",
-      "• الزيارات: 930 – 1,730",
-      "• العملاء المحتملون: 28 – 52",
+      "الأرقام تقديرية وليست ضماناً للنتائج.",
       "",
-      "💡 نبدأ بهاي الطريقة لتناسب ميزانيتك:",
-      "• نبدأ بمنصة وحدة (Instagram مثلاً) ونوسع لاحقاً",
-      "• نخلي التسليم عادي بدل مستعجل",
-      "• نبدأ بخدمة أصغر (تصميم شعار فقط مثلاً)",
-      "ما نرفض أي طلب: نبدأ بالخطوة الأصغر ونتوسع لاحقاً.",
-      "",
-      "الأرقام تقديرية للتخطيط، وتُثبَّت في العرض الرسمي قبل أي دفعة.",
-      "بنيناها على متوسطات السوق (تكلفة الظهور، نسبة النقر، نسبة التحويل) — مو وعد بنتيجة.",
-      "إذا حبيت تكمل مع الفريق اكتب: «أريد التحدث مع شخص من الفريق».",
-    ].join("\n");
-
-    await waitFor(() => expect(estimateBubbles()).toHaveLength(1));
-    const [bubble] = estimateBubbles();
-    expect(bubble.querySelector("p")?.textContent).toBe(expected);
-    // It is the last thing the client sees, and it is not a saved conversation message.
-    expect(shownBodies().at(-1)).toBe(expected);
+      "كيف تحب يتواصل معك فريق أفق؟",
+      "□ 📱 واتساب",
+      "□ 📧 إيميل: البريد المسجّل بحسابك",
+      "□ 💬 إشعار في الموقع",
+    ].join("\n"));
+    expect(postCalls()).toHaveLength(0);
     expect(saved).toEqual([greeting]);
-    expect(postCalls()).toHaveLength(0);
-
-    // الأتعاب وتوزيع الميزانية: داخلي بالكامل. (midPrice 420 → fee 84، إعلانات 336)
-    expect(expected).not.toMatch(/أتعاب|عمولة|توزيع الميزانية|نصيب|agency fee|ad spend|20%|25%/);
-    expect(expected).not.toContain("84$");
-    expect(expected).not.toContain("336$");
   });
 
-  it("describes the outcome of a non-ad service qualitatively: no impressions, no leads", async () => {
+  it("shows monthly projections for a good budget, with larger ranges than the $200 plan", async () => {
     await openChat();
-    // تصميم · متوسط · Instagram · مستعجل · 200-500$ → founding 300×1.25 … 700×1.25
-    await answer(["تصميم", "متوسط", "Instagram", "مستعجل (3 أيام)", "200-500$"]);
+    await answer([
+      "إعلانات", "متوسط", "متعدد", "عادي (7 أيام)", "500-1500$",
+      "🏪 متجر محلي", "150,000 - 500,000", "🇮🇶 العراق كله",
+    ]);
 
-    const expected = [
-      "حسبت لك تقدير مبدئي على أساس إجاباتك:",
-      "",
-      "💰 السعر التقديري: 375$ – 875$",
-      "🎯 الأنسب لمشروعك: 625$",
-      "📊 تقييم الميزانية: 🟢 متوسطة",
-      "",
-      FOUNDING_BADGE_AR,
-      "",
-      "✨ ما تحصل عليه:",
-      "تصاميم بهوية واحدة: شكل ثابت لحسابك يوضّح عرضك من أول نظرة ويزيد ثقة الزائر.",
-      "",
-      "الأرقام تقديرية للتخطيط، وتُثبَّت في العرض الرسمي قبل أي دفعة.",
-      "إذا حبيت تكمل مع الفريق اكتب: «أريد التحدث مع شخص من الفريق».",
-    ].join("\n");
-
-    await waitFor(() => expect(estimateBubbles()).toHaveLength(1));
-    expect(estimateBubbles()[0].querySelector("p")?.textContent).toBe(expected);
-    expect(expected).not.toContain("الظهور");
-    expect(expected).not.toContain("العملاء المحتملون");
-    // A medium budget needs no suggestions.
-    expect(expected).not.toContain("💡");
+    const body = estimateBubbles()[0]!.querySelector("p")?.textContent ?? "";
+    expect(body).toContain("ميزانيتك: $1,500 شهرياً 🟢🟢");
+    expect(body).toContain("📊 النتائج المتوقعة شهرياً:");
+    expect(body).toContain("• الظهور: ~62,000-114,000");
+    expect(body).toContain("• الزيارات: ~620-1,140");
+    expect(body).toContain("• المهتمون: ~15-29");
+    expect(body).toContain("الأرقام تقديرية وليست ضماناً للنتائج.");
+    expect(body).not.toContain("تكفي لـ");
+    expect(body).not.toContain("السعر التقديري");
   });
 
-  it("runs the estimation in English too, with the English labels and suggestions", async () => {
-    saved = [{ ...greeting, body: "Welcome to Ofoq.", language: "en" }];
-    await openChat("en");
-    await answer(["SEO", "Small", "Google", "Standard (7 days)", "Under $200"]);
-
-    await waitFor(() => expect(estimateBubbles()).toHaveLength(1));
-    const body = estimateBubbles()[0].querySelector("p")?.textContent ?? "";
-
-    // seo founding: 250×0.7 … 700×0.7 = 175 … 490
-    expect(body).toContain("💰 Estimated price: 175$ – 490$");
-    expect(body).toContain("🎯 Best fit for your project: 333$");
-    expect(body).toContain("📊 Budget read: 🟡 Tight");
-    expect(body).toContain(FOUNDING_BADGE_EN);
-    expect(body).toContain("✨ What you get:");
-    expect(body).toContain("• We start with one platform (Instagram, for example) and expand later");
-    expect(body).not.toContain("Impressions:");
-    expect(body).not.toContain("أتعاب");
-  });
-
-  it("shows the founding badge on the estimate while the client is among the first 10", async () => {
+  it("shows only the official price for design, with no invented performance stats", async () => {
     await openChat();
-    await answer(["تصميم", "متوسط", "Instagram", "عادي (7 أيام)", "500-1500$"]);
+    await answer([
+      "تصميم", "متوسط", "Instagram", "عادي (7 أيام)", "200-500$",
+      "🍽️ مطعم/مقهى", "50,000 - 150,000", "🏙️ بغداد فقط",
+    ]);
 
-    await waitFor(() => expect(estimateBubbles()).toHaveLength(1));
-    const body = estimateBubbles()[0].querySelector("p")?.textContent ?? "";
-    expect(body).toContain(FOUNDING_BADGE_AR);
-    // The badge sits under the budget read, above the qualitative outcome.
-    expect(body.indexOf(FOUNDING_BADGE_AR)).toBeGreaterThan(body.indexOf("📊 تقييم الميزانية"));
-    expect(body.indexOf(FOUNDING_BADGE_AR)).toBeLessThan(body.indexOf("✨ ما تحصل عليه:"));
-    // founding: 300 … 700 (medium × single × normal = 1)
-    expect(body).toContain("💰 السعر التقديري: 300$ – 700$");
+    const body = estimateBubbles()[0]!.querySelector("p")?.textContent ?? "";
+    expect(body).toBe([
+      "السعر التقديري: $500-$1,200",
+      "",
+      "كيف تحب يتواصل معك فريق أفق؟",
+      "□ 📱 واتساب",
+      "□ 📧 إيميل: البريد المسجّل بحسابك",
+      "□ 💬 إشعار في الموقع",
+    ].join("\n"));
+    expect(body).not.toMatch(/الظهور|الزيارات|المهتمون|Impressions|Visits|Leads/i);
   });
 
-  it("drops the badge and moves to normal prices once the agency is past its first 10 clients", async () => {
-    render(<AssistantChat locale="ar" intent="service_request" customerCount={12} />);
-    await waitFor(() => expect(document.querySelectorAll(".chat-messages .chat-message").length).toBeGreaterThan(0));
-    await answer(["تصميم", "متوسط", "Instagram", "عادي (7 أيام)", "500-1500$"]);
-
-    await waitFor(() => expect(estimateBubbles()).toHaveLength(1));
-    const body = estimateBubbles()[0].querySelector("p")?.textContent ?? "";
-    expect(body).not.toContain(FOUNDING_BADGE_AR);
-    expect(body).not.toContain("مبروك");
-    // normal: 500 … 1200 (the same answers, no launch prices).
-    expect(body).toContain("💰 السعر التقديري: 500$ – 1,200$");
-    expect(body).toContain("🎯 الأنسب لمشروعك: 850$");
+  it("does not invent a price for the unlisted Other service", () => {
+    const body = serviceRequestEstimate({ type: "other", targeting: "iraq_all" }, "ar");
+    expect(body).toContain("ما عندنا نطاق سعر معتمد لهذا النوع");
+    expect(body).not.toMatch(/\$\d/);
+    expect(body).toContain("كيف تحب يتواصل معك فريق أفق؟");
   });
 
-  it("does not translate a budget band that is no longer offered: the request restarts from TYPE", async () => {
-    const answerLog = ["TYPE", "SIZE", "PLATFORMS", "DEADLINE", "BUDGET"].map((step) => ({
-      step,
-      afterMessageId: "m-greeting",
-      answeredAt: "2026-10-12T05:02:00.000Z",
-    }));
-    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
-      intent: "service_request",
-      conversationId: "conv-1",
-      afterMessageId: "m-greeting",
-      startedAt: "2026-10-12T05:00:00.000Z",
-      step: "SUMMARY",
-      answers: { type: "design", size: "medium", platforms: "instagram", deadline: "urgent_3_days", budget: "300_700" },
-      answerLog,
-    }));
+  it("formats the non-ad estimate and contact choices in English", () => {
+    const body = serviceRequestEstimate({ type: "seo", size: "small", targeting: "gulf" }, "en");
+    expect(body).toContain("Estimated price: $320-$800");
+    expect(body).toContain("How would you like the Ofoq team to contact you?");
+    expect(body).toContain("□ 📧 Email: the address registered to your account");
+    expect(body).not.toContain("Impressions");
+  });
 
-    await openChat();
-
-    // «300-700$» is not one of the four bands (200 / 500 / 1500): nothing is priced
-    // from it and nothing is guessed — the client is asked again from the start.
-    expect(estimateBubbles()).toHaveLength(0);
-    expect(shownBodies()).not.toContain("300-700$");
-    expect(document.querySelectorAll(".chat-service-options button")).toHaveLength(6);
-    expect(postCalls()).toHaveLength(0);
-
-    // Answering again rebases the stored request on the offered options.
-    choose("تصميم");
-    await waitFor(() => expect(JSON.parse(window.sessionStorage.getItem(STORAGE_KEY) ?? "null")).toMatchObject({ step: "SIZE", answers: { type: "design" }, answerLog: [{ step: "TYPE" }] }));
+  it("never exposes agency fees or a budget split in client messages", () => {
+    const ads = serviceRequestEstimate({ type: "ads", budget: "under_200", targeting: "iraq_all" }, "ar");
+    const design = serviceRequestEstimate({ type: "design", size: "medium" }, "ar");
+    for (const body of [ads, design]) {
+      expect(body).not.toMatch(/أتعاب|عمولة|نصيب|توزيع الميزانية|agency fee|ad spend|commission/i);
+    }
   });
 });
