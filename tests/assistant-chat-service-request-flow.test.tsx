@@ -1,17 +1,18 @@
 // @vitest-environment jsdom
 /**
  * The guided «طلب خدمة» conversation after the welcome: TYPE → SIZE →
- * PLATFORMS → DEADLINE → BUDGET → SUMMARY.
+ * PLATFORMS → DEADLINE → BUDGET → SUMMARY → ESTIMATE (the price estimation the
+ * pricing agent computes from the answers).
  *
  * The real `AssistantChat` renders here with `fetch` replaced by an in-memory
  * /api/chat. Option choices are kept in the request context (sessionStorage),
- * displayed in the chat and never sent to the API; after the summary the flow
+ * displayed in the chat and never sent to the API; after the estimate the flow
  * stops without calling anything.
  */
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AssistantChat, matchServiceOption } from "../src/components/assistant-chat";
+import { AssistantChat, matchServiceOption, serviceRequestEstimate } from "../src/components/assistant-chat";
 
 const STORAGE_KEY = "ofoq:chat:service-request";
 const WELCOME_AR = "أهلاً بك في أفق 👋\nأنا مساعد أفق، راح أساعدك تجهّز طلبك خطوة بخطوة.\n\nأول شي: شنو نوع الخدمة اللي تحتاجها؟ (تصميم / إعلانات / سوشيال ميديا / محتوى / SEO / غير ذلك)";
@@ -25,7 +26,18 @@ const QUESTION_AR = {
   BUDGET: "شنو الميزانية التقريبية؟",
 };
 
-const SUMMARY_AR = "تمام، فهمت طلبك 👌\n\n- الخدمة: تصميم\n- الحجم: متوسط\n- المنصات: Instagram\n- التسليم: مستعجل (3 أيام)\n- الميزانية: 300-700$\n\nخليني أحسب لك سعر تقديري...";
+const SUMMARY_AR = "تمام، فهمت طلبك 👌\n\n- الخدمة: تصميم\n- الحجم: متوسط\n- المنصات: Instagram\n- التسليم: مستعجل (3 أيام)\n- الميزانية: 200-500$\n\nخليني أحسب لك سعر تقديري...";
+
+/**
+ * The estimate the pricing agent produces for exactly the answers
+ * `answerEverything` gives. It is derived, not typed out, so this file stays
+ * about the flow (order, placement, refresh); the wording itself is asserted
+ * literally in tests/assistant-chat-pricing-estimate.test.tsx.
+ */
+const ESTIMATE_AR = serviceRequestEstimate(
+  { type: "design", size: "medium", platforms: "instagram", deadline: "urgent_3_days", budget: "200_500" },
+  "ar",
+);
 
 interface SavedMessage { id: string; sender: string; body: string; language: string; createdAt: string }
 
@@ -84,7 +96,7 @@ async function answerEverything(): Promise<void> {
   choose("متوسط");
   choose("Instagram");
   choose("مستعجل (3 أيام)");
-  choose("300-700$");
+  choose("200-500$");
   await waitFor(() => expect(shownBodies()).toContain(SUMMARY_AR));
 }
 
@@ -140,7 +152,7 @@ describe("guided service request conversation", () => {
 
     choose("مرن (14 يوم)");
     await waitFor(() => expect(shownBodies().at(-1)).toBe(QUESTION_AR.BUDGET));
-    expect(shownOptions()).toEqual(["أقل من 300$", "300-700$", "700-1500$", "أكثر من 1500$"]);
+    expect(shownOptions()).toEqual(["أقل من 200$", "200-500$", "500-1500$", "أكثر من 1500$"]);
     expect(storedContext()).toMatchObject({
       step: "BUDGET",
       answers: { type: "social_media", size: "large", platforms: "multiple", deadline: "flexible_14_days" },
@@ -158,11 +170,11 @@ describe("guided service request conversation", () => {
       "متوسط", QUESTION_AR.PLATFORMS,
       "Instagram", QUESTION_AR.DEADLINE,
       "مستعجل (3 أيام)", QUESTION_AR.BUDGET,
-      "300-700$", SUMMARY_AR,
+      "200-500$", SUMMARY_AR, ESTIMATE_AR,
     ]);
     expect(storedContext()).toMatchObject({
       step: "SUMMARY",
-      answers: { type: "design", size: "medium", platforms: "instagram", deadline: "urgent_3_days", budget: "300_700" },
+      answers: { type: "design", size: "medium", platforms: "instagram", deadline: "urgent_3_days", budget: "200_500" },
     });
   });
 
@@ -195,7 +207,12 @@ describe("guided service request conversation", () => {
     await waitFor(() => expect(shownBodies().at(-1)).toBe("What is your approximate budget?"));
     choose("Over $1500");
 
-    await waitFor(() => expect(shownBodies().at(-1)).toBe("Great, I've got your request 👌\n\n- Service: SEO\n- Size: Small\n- Platforms: Google\n- Delivery: Standard (7 days)\n- Budget: Over $1500\n\nLet me work out an estimated price for you..."));
+    const summaryEn = "Great, I've got your request 👌\n\n- Service: SEO\n- Size: Small\n- Platforms: Google\n- Delivery: Standard (7 days)\n- Budget: Over $1500\n\nLet me work out an estimated price for you...";
+    const estimateEn = serviceRequestEstimate({ type: "seo", size: "small", platforms: "google", deadline: "standard_7_days", budget: "over_1500" }, "en");
+    await waitFor(() => expect(shownBodies().slice(-2)).toEqual([summaryEn, estimateEn]));
+    // The estimate of a non-ad service is qualitative: it carries no invented numbers.
+    expect(estimateEn).toContain("Estimated price: ");
+    expect(estimateEn).not.toContain("Impressions:");
     expect(storedContext()).toMatchObject({ step: "SUMMARY", answers: { type: "seo", size: "small", platforms: "google", deadline: "standard_7_days", budget: "over_1500" } });
   });
 
@@ -224,7 +241,8 @@ describe("guided service request conversation", () => {
     await openChat();
 
     expect(shownBodies().filter((body) => body === SUMMARY_AR)).toHaveLength(1);
-    expect(shownBodies().at(-1)).toBe(SUMMARY_AR);
+    expect(shownBodies().filter((body) => body === ESTIMATE_AR)).toHaveLength(1);
+    expect(shownBodies().slice(-2)).toEqual([SUMMARY_AR, ESTIMATE_AR]);
     expect(document.querySelector(".chat-service-options")).toBeNull();
     expect(postCalls()).toHaveLength(0);
   });
@@ -292,9 +310,9 @@ describe("typed answers during the guided conversation", () => {
     await waitFor(() => expect(storedContext()).toMatchObject({ step: "DEADLINE", answers: { platforms: "instagram" } }));
     type("مستعجل (3 أيام)");
     await waitFor(() => expect(storedContext()).toMatchObject({ step: "BUDGET", answers: { deadline: "urgent_3_days" } }));
-    type("300-700$");
+    type("200-500$");
 
-    await waitFor(() => expect(shownBodies().at(-1)).toBe(SUMMARY_AR));
+    await waitFor(() => expect(shownBodies().slice(-2)).toEqual([SUMMARY_AR, ESTIMATE_AR]));
     expect(postCalls()).toHaveLength(0);
 
     expect(matchServiceOption("TYPE", "social_media")).toBe("social_media");

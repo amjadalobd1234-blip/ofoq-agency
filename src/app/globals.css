@@ -1944,6 +1944,9 @@ button:disabled {
 .chat-message time { justify-self: end; color: #706d65; font-size: 8px; }
 .chat-message-client { align-self: flex-start; border-color: rgba(212, 175, 55, 0.28); border-end-start-radius: 3px; background: rgba(212, 175, 55, 0.085); }
 .chat-message-assistant { align-self: flex-end; border-end-end-radius: 3px; }
+/* The closing estimate of a service request: the price, the budget read and the expected results. */
+.chat-message-estimate { width: min(94%, 620px); border-color: rgba(212, 175, 55, 0.32); background: linear-gradient(180deg, rgba(212, 175, 55, 0.075), rgba(212, 175, 55, 0.015)); }
+.chat-message-estimate p { color: #efe9dc; }
 .message-sender { color: var(--gold-light); font-size: 9px; font-weight: 600; }
 .chat-typing { display: flex; align-items: center; gap: 9px; color: #918d83; font-size: 10px; }
 .typing-dots { display: inline-flex; gap: 3px; }
