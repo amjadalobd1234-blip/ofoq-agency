@@ -13,8 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AssistantChat } from "../src/components/assistant-chat";
 
-const WELCOME_AR = "تمام! خلينا نجهّز طلب خدمة. أول شي: شنو نوع الخدمة اللي تحتاجها؟\n(تصميم / إعلانات / سوشيال ميديا / محتوى / SEO / غير ذلك)";
-const WELCOME_EN = "Great! Let's get a service request ready. First: what type of service do you need?\n(Design / Ads / Social media / Content / SEO / Other)";
+const WELCOME_AR = "أهلاً بك في أفق 👋\nأنا مساعد أفق، راح أساعدك تجهّز طلبك خطوة بخطوة.\n\nأول شي: شنو نوع الخدمة اللي تحتاجها؟ (تصميم / إعلانات / سوشيال ميديا / محتوى / SEO / غير ذلك)";
+const WELCOME_EN = "Welcome to Ofoq 👋\nI'm the Ofoq assistant, and I'll help you build your request step by step.\n\nFirst: what type of service do you need? (Design / Ads / Social media / Content / SEO / Other)";
 const STORAGE_KEY = "ofoq:chat:service-request";
 const REPLY = "ممتاز، خلينا نعرف تفاصيل أكثر عن التصميم.";
 

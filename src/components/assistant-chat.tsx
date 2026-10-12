@@ -32,8 +32,8 @@ const SERVICE_REQUEST_STORAGE_KEY = "ofoq:chat:service-request";
 const SERVICE_REQUEST_WELCOME_ID = "service-request-welcome";
 /** First assistant message of a service request. Displayed in the chat only; it is not saved to the conversation. */
 const SERVICE_REQUEST_WELCOME: Record<Locale, string> = {
-  ar: "تمام! خلينا نجهّز طلب خدمة. أول شي: شنو نوع الخدمة اللي تحتاجها؟\n(تصميم / إعلانات / سوشيال ميديا / محتوى / SEO / غير ذلك)",
-  en: "Great! Let's get a service request ready. First: what type of service do you need?\n(Design / Ads / Social media / Content / SEO / Other)",
+  ar: "أهلاً بك في أفق 👋\nأنا مساعد أفق، راح أساعدك تجهّز طلبك خطوة بخطوة.\n\nأول شي: شنو نوع الخدمة اللي تحتاجها؟ (تصميم / إعلانات / سوشيال ميديا / محتوى / SEO / غير ذلك)",
+  en: "Welcome to Ofoq 👋\nI'm the Ofoq assistant, and I'll help you build your request step by step.\n\nFirst: what type of service do you need? (Design / Ads / Social media / Content / SEO / Other)",
 };
 
 export function AssistantChat({ locale, intent }: { locale: Locale; intent?: string }) {
