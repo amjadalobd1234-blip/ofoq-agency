@@ -17,6 +17,8 @@ const WELCOME_AR = "أهلاً بك في أفق 👋\nأنا مساعد أفق،
 const WELCOME_EN = "Welcome to Ofoq 👋\nI'm the Ofoq assistant, and I'll help you build your request step by step.\n\nFirst: what type of service do you need? (Design / Ads / Social media / Content / SEO / Other)";
 const STORAGE_KEY = "ofoq:chat:service-request";
 const REPLY = "ممتاز، خلينا نعرف تفاصيل أكثر عن التصميم.";
+/** Free text that is not one of the TYPE options, so it goes to the assistant like any message. */
+const FREE_TEXT = "أحتاج تصميم شعار لمطعمي";
 
 interface SavedMessage { id: string; sender: string; body: string; language: string; createdAt: string }
 
@@ -70,9 +72,10 @@ describe("chat opened from «اطلب خدمة جديدة» (?intent=service_req
 
     await waitFor(() => expect(shownBodies()).toEqual([greeting.body, WELCOME_AR]));
     expect(storedContext()).toMatchObject({ intent: "service_request", conversationId: "conv-1", afterMessageId: "m-greeting" });
-    // Nothing else changes for this intent: the hint note and the starter suggestions are still there.
+    // The hint note stays; the generic starter suggestions give way to the first question's options.
     expect(document.querySelector(".chat-context-note")).not.toBeNull();
-    expect(screen.getByRole("button", { name: "أريد معرفة الأسعار" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "أريد معرفة الأسعار" })).toBeNull();
+    expect(screen.getByRole("button", { name: "تصميم" })).toBeTruthy();
   });
 
   it("keeps the welcome above the client's answer, and a refresh does not ask again", async () => {
@@ -80,17 +83,17 @@ describe("chat opened from «اطلب خدمة جديدة» (?intent=service_req
     await waitFor(() => expect(shownBodies()).toEqual([greeting.body, WELCOME_AR]));
 
     const composer = screen.getByRole("textbox");
-    fireEvent.change(composer, { target: { value: "تصميم" } });
+    fireEvent.change(composer, { target: { value: FREE_TEXT } });
     fireEvent.submit(composer.closest("form")!);
-    await waitFor(() => expect(shownBodies()).toEqual([greeting.body, WELCOME_AR, "تصميم", REPLY]));
+    await waitFor(() => expect(shownBodies()).toEqual([greeting.body, WELCOME_AR, FREE_TEXT, REPLY]));
     // The welcome is displayed only; the API was asked to save the client's message alone.
     const post = vi.mocked(fetch).mock.calls.find(([, init]) => init?.method === "POST");
-    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ message: "تصميم" });
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ message: FREE_TEXT });
 
     // Refresh: the page loads again with the same URL and the answer is now saved history.
     cleanup();
     render(<AssistantChat locale="ar" intent="service_request" />);
-    await waitFor(() => expect(shownBodies()).toEqual([greeting.body, WELCOME_AR, "تصميم", REPLY]));
+    await waitFor(() => expect(shownBodies()).toEqual([greeting.body, WELCOME_AR, FREE_TEXT, REPLY]));
     expect(shownBodies().filter((body) => body === WELCOME_AR)).toHaveLength(1);
   });
 

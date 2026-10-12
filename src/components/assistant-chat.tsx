@@ -26,7 +26,93 @@ interface ServiceRequestContext {
   /** Last saved message when the request started: the welcome is shown right after it. */
   afterMessageId: string | null;
   startedAt: string;
+  /** The question waiting for an answer, or SUMMARY once every question was answered. */
+  step: ServiceRequestStep;
+  /** Chosen option ids (language independent), e.g. { type: "design", size: "small" }. */
+  answers: ServiceRequestAnswers;
+  /** When each answer was given and which saved message was last at that moment, so the exchange stays in place. */
+  answerLog: ServiceRequestAnswerEvent[];
 }
+
+export type ServiceRequestStep = "TYPE" | "SIZE" | "PLATFORMS" | "DEADLINE" | "BUDGET" | "SUMMARY";
+/** Every step except SUMMARY asks one question. */
+export type ServiceRequestQuestionStep = Exclude<ServiceRequestStep, "SUMMARY">;
+export type ServiceRequestAnswerKey = "type" | "size" | "platforms" | "deadline" | "budget";
+export type ServiceRequestAnswers = Partial<Record<ServiceRequestAnswerKey, string>>;
+
+interface ServiceRequestAnswerEvent {
+  step: ServiceRequestQuestionStep;
+  afterMessageId: string | null;
+  answeredAt: string;
+}
+
+interface ServiceRequestOption {
+  id: string;
+  label: Record<Locale, string>;
+}
+
+interface ServiceRequestQuestion {
+  answerKey: ServiceRequestAnswerKey;
+  question: Record<Locale, string>;
+  options: ServiceRequestOption[];
+}
+
+export const SERVICE_REQUEST_STEPS: readonly ServiceRequestStep[] = ["TYPE", "SIZE", "PLATFORMS", "DEADLINE", "BUDGET", "SUMMARY"];
+
+/** The guided questions of a service request, in order. Option ids are what gets stored; labels are what the client sees. */
+export const SERVICE_REQUEST_QUESTIONS: Record<ServiceRequestQuestionStep, ServiceRequestQuestion> = {
+  TYPE: {
+    answerKey: "type",
+    question: { ar: "شنو نوع الخدمة اللي تحتاجها؟", en: "What type of service do you need?" },
+    options: [
+      { id: "design", label: { ar: "تصميم", en: "Design" } },
+      { id: "ads", label: { ar: "إعلانات", en: "Ads" } },
+      { id: "social_media", label: { ar: "سوشيال ميديا", en: "Social media" } },
+      { id: "content", label: { ar: "محتوى", en: "Content" } },
+      { id: "seo", label: { ar: "SEO", en: "SEO" } },
+      { id: "other", label: { ar: "غير ذلك", en: "Other" } },
+    ],
+  },
+  SIZE: {
+    answerKey: "size",
+    question: { ar: "شكد حجم المشروع؟", en: "How big is the project?" },
+    options: [
+      { id: "small", label: { ar: "صغير", en: "Small" } },
+      { id: "medium", label: { ar: "متوسط", en: "Medium" } },
+      { id: "large", label: { ar: "كبير", en: "Large" } },
+    ],
+  },
+  PLATFORMS: {
+    answerKey: "platforms",
+    question: { ar: "على أي منصات تريد نشتغل؟", en: "Which platforms should we work on?" },
+    options: [
+      { id: "instagram", label: { ar: "Instagram", en: "Instagram" } },
+      { id: "tiktok", label: { ar: "TikTok", en: "TikTok" } },
+      { id: "facebook", label: { ar: "Facebook", en: "Facebook" } },
+      { id: "google", label: { ar: "Google", en: "Google" } },
+      { id: "multiple", label: { ar: "متعدد", en: "Multiple" } },
+    ],
+  },
+  DEADLINE: {
+    answerKey: "deadline",
+    question: { ar: "شكد وقت عندك للتسليم؟", en: "How much time do you have for delivery?" },
+    options: [
+      { id: "standard_7_days", label: { ar: "عادي (7 أيام)", en: "Standard (7 days)" } },
+      { id: "urgent_3_days", label: { ar: "مستعجل (3 أيام)", en: "Urgent (3 days)" } },
+      { id: "flexible_14_days", label: { ar: "مرن (14 يوم)", en: "Flexible (14 days)" } },
+    ],
+  },
+  BUDGET: {
+    answerKey: "budget",
+    question: { ar: "شنو الميزانية التقريبية؟", en: "What is your approximate budget?" },
+    options: [
+      { id: "under_300", label: { ar: "أقل من 300$", en: "Under $300" } },
+      { id: "300_700", label: { ar: "300-700$", en: "$300-700" } },
+      { id: "700_1500", label: { ar: "700-1500$", en: "$700-1500" } },
+      { id: "over_1500", label: { ar: "أكثر من 1500$", en: "Over $1500" } },
+    ],
+  },
+};
 
 const SERVICE_REQUEST_STORAGE_KEY = "ofoq:chat:service-request";
 const SERVICE_REQUEST_WELCOME_ID = "service-request-welcome";
@@ -35,6 +121,53 @@ const SERVICE_REQUEST_WELCOME: Record<Locale, string> = {
   ar: "أهلاً بك في أفق 👋\nأنا مساعد أفق، راح أساعدك تجهّز طلبك خطوة بخطوة.\n\nأول شي: شنو نوع الخدمة اللي تحتاجها؟ (تصميم / إعلانات / سوشيال ميديا / محتوى / SEO / غير ذلك)",
   en: "Welcome to Ofoq 👋\nI'm the Ofoq assistant, and I'll help you build your request step by step.\n\nFirst: what type of service do you need? (Design / Ads / Social media / Content / SEO / Other)",
 };
+
+/** Shown after the last answer. The flow stops here: no price is requested yet. */
+function serviceRequestSummary(answers: ServiceRequestAnswers, locale: Locale): string {
+  const label = (step: ServiceRequestQuestionStep) => optionLabel(step, answers[SERVICE_REQUEST_QUESTIONS[step].answerKey], locale);
+  return locale === "ar"
+    ? `تمام، فهمت طلبك 👌\n\n- الخدمة: ${label("TYPE")}\n- الحجم: ${label("SIZE")}\n- المنصات: ${label("PLATFORMS")}\n- التسليم: ${label("DEADLINE")}\n- الميزانية: ${label("BUDGET")}\n\nخليني أحسب لك سعر تقديري...`
+    : `Great, I've got your request 👌\n\n- Service: ${label("TYPE")}\n- Size: ${label("SIZE")}\n- Platforms: ${label("PLATFORMS")}\n- Delivery: ${label("DEADLINE")}\n- Budget: ${label("BUDGET")}\n\nLet me work out an estimated price for you...`;
+}
+
+function optionLabel(step: ServiceRequestQuestionStep, optionId: string | undefined, locale: Locale): string {
+  return SERVICE_REQUEST_QUESTIONS[step].options.find((option) => option.id === optionId)?.label[locale] ?? optionId ?? "";
+}
+
+function nextServiceRequestStep(step: ServiceRequestStep): ServiceRequestStep {
+  return SERVICE_REQUEST_STEPS[Math.min(SERVICE_REQUEST_STEPS.indexOf(step) + 1, SERVICE_REQUEST_STEPS.length - 1)];
+}
+
+function isQuestionStep(step: ServiceRequestStep): step is ServiceRequestQuestionStep {
+  return step !== "SUMMARY";
+}
+
+/**
+ * The option of `step` a typed message stands for, if any: it must be the whole
+ * message and equal an option's Arabic label, English label or id ("تصميم",
+ * "Design", "design"). Case, extra spaces, trailing punctuation, "_"/"-" and
+ * Arabic letter variants (أ/إ/آ, ة/ه, ى/ي, tatweel) are ignored.
+ */
+export function matchServiceOption(step: ServiceRequestQuestionStep, text: string): string | null {
+  const typed = normalizeAnswer(text);
+  if (!typed) return null;
+  const match = SERVICE_REQUEST_QUESTIONS[step].options.find((option) =>
+    [option.id, option.label.ar, option.label.en].some((candidate) => normalizeAnswer(candidate) === typed));
+  return match?.id ?? null;
+}
+
+function normalizeAnswer(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\u0640/g, "")
+    .replace(/[أإآ]/g, "ا")
+    .replace(/ة/g, "ه")
+    .replace(/ى/g, "ي")
+    .replace(/[_\-–]/g, " ")
+    .replace(/[.!?؟،,؛;]+$/u, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 export function AssistantChat({ locale, intent }: { locale: Locale; intent?: string }) {
   const ar = locale === "ar";
@@ -80,6 +213,14 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
     event?.preventDefault();
     const message = input.trim();
     if (!message || sending || loading || !ready) return;
+    // A typed answer that names an option of the open question counts as choosing it (same as the button).
+    const typedOption = serviceRequest && isQuestionStep(serviceRequest.step) ? matchServiceOption(serviceRequest.step, message) : null;
+    if (typedOption) {
+      setError("");
+      setInput("");
+      chooseServiceOption(typedOption);
+      return;
+    }
     setError("");
     setInput("");
     setSending(true);
@@ -114,6 +255,26 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
     }
   }
 
+  /**
+   * A guided answer, from a button or a typed message that matches an option:
+   * saved in the request context (and sessionStorage), then the next question —
+   * or the summary after BUDGET — is shown. Nothing is sent to the API.
+   */
+  function chooseServiceOption(optionId: string) {
+    if (!serviceRequest || sending || !isQuestionStep(serviceRequest.step)) return;
+    const step = serviceRequest.step;
+    const question = SERVICE_REQUEST_QUESTIONS[step];
+    if (!question.options.some((option) => option.id === optionId)) return;
+    const next: ServiceRequestContext = {
+      ...serviceRequest,
+      step: nextServiceRequestStep(step),
+      answers: { ...serviceRequest.answers, [question.answerKey]: optionId },
+      answerLog: [...serviceRequest.answerLog, { step, afterMessageId: messages.length > 0 ? messages[messages.length - 1].id : null, answeredAt: new Date().toISOString() }],
+    };
+    setServiceRequest(next);
+    saveServiceRequest(next);
+  }
+
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -121,8 +282,10 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
     }
   }
 
-  // The service-request welcome is displayed, not saved: it sits after the message that was last when the request started.
-  const visibleMessages = serviceRequest ? withServiceWelcome(messages, serviceRequest, locale) : messages;
+  // The service-request exchange is displayed, not saved: the welcome sits after the message that was last when the
+  // request started, and each answer (with the question that follows it) after the message that was last when it was chosen.
+  const visibleMessages = serviceRequest ? withServiceRequest(messages, serviceRequest, locale) : messages;
+  const pendingQuestion = serviceRequest && isQuestionStep(serviceRequest.step) ? SERVICE_REQUEST_QUESTIONS[serviceRequest.step] : null;
 
   const quickReplies = ar
     ? ["أريد إدارة حسابات التواصل", "أحتاج إلى موقع إلكتروني", "أريد معرفة الأسعار"]
@@ -156,7 +319,9 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
           <div ref={tailRef} />
         </div>
 
-        {messages.length <= 1 && !loading && <div className="chat-quick-replies" aria-label={ar ? "اقتراحات للبدء" : "Suggested prompts"}>{quickReplies.map((reply) => <button type="button" key={reply} onClick={() => setInput(reply)}>{reply}</button>)}</div>}
+        {pendingQuestion && !loading && <div className="chat-quick-replies chat-service-options" role="group" aria-label={pendingQuestion.question[locale]}>{pendingQuestion.options.map((option) => <button type="button" key={option.id} onClick={() => chooseServiceOption(option.id)} disabled={sending}>{option.label[locale]}</button>)}</div>}
+
+        {!serviceRequest && messages.length <= 1 && !loading && <div className="chat-quick-replies" aria-label={ar ? "اقتراحات للبدء" : "Suggested prompts"}>{quickReplies.map((reply) => <button type="button" key={reply} onClick={() => setInput(reply)}>{reply}</button>)}</div>}
 
         <form className="chat-composer" onSubmit={sendMessage}>
           <label className="sr-only" htmlFor="assistant-message">{copy.placeholder}</label>
@@ -194,30 +359,68 @@ function openServiceRequest(conversationId: string, messages: ChatMessage[]): Se
     conversationId,
     afterMessageId: messages.length > 0 ? messages[messages.length - 1].id : null,
     startedAt: new Date().toISOString(),
+    step: "TYPE",
+    answers: {},
+    answerLog: [],
   };
+  saveServiceRequest(context);
+  return context;
+}
+
+function saveServiceRequest(context: ServiceRequestContext): void {
   try {
     window.sessionStorage.setItem(SERVICE_REQUEST_STORAGE_KEY, JSON.stringify(context));
   } catch {
     // Storage can be blocked (private mode, browser policy); the request still works for this page view.
   }
-  return context;
 }
 
+/**
+ * Reads this tab's request. A context saved before the guided questions existed
+ * (no step) — or one whose progress does not add up — continues from TYPE.
+ */
 function readServiceRequest(): ServiceRequestContext | null {
   try {
     const stored = JSON.parse(window.sessionStorage.getItem(SERVICE_REQUEST_STORAGE_KEY) ?? "null");
-    return stored?.intent === "service_request" && typeof stored.conversationId === "string" ? stored : null;
+    if (stored?.intent !== "service_request" || typeof stored.conversationId !== "string") return null;
+    const answerLog: ServiceRequestAnswerEvent[] = Array.isArray(stored.answerLog) ? stored.answerLog : [];
+    const answers: ServiceRequestAnswers = stored.answers && typeof stored.answers === "object" ? stored.answers : {};
+    const step: ServiceRequestStep = SERVICE_REQUEST_STEPS[answerLog.length];
+    const consistent = answerLog.length < SERVICE_REQUEST_STEPS.length && stored.step === step && answerLog.every((event, index) => {
+      const expected = SERVICE_REQUEST_STEPS[index] as ServiceRequestQuestionStep;
+      const answer = answers[SERVICE_REQUEST_QUESTIONS[expected].answerKey];
+      return event?.step === expected && SERVICE_REQUEST_QUESTIONS[expected].options.some((option) => option.id === answer);
+    });
+    return consistent
+      ? { ...stored, step, answers, answerLog }
+      : { ...stored, step: "TYPE", answers: {}, answerLog: [] };
   } catch {
     return null;
   }
 }
 
-/** Places the welcome after its anchor message, or first when the anchor is no longer in the loaded history. */
-function withServiceWelcome(messages: ChatMessage[], context: ServiceRequestContext, locale: Locale): ChatMessage[] {
-  const welcome: ChatMessage = { id: SERVICE_REQUEST_WELCOME_ID, sender: "ASSISTANT", body: SERVICE_REQUEST_WELCOME[locale], language: locale, createdAt: context.startedAt };
-  const anchor = messages.findIndex((message) => message.id === context.afterMessageId);
-  const position = anchor === -1 ? 0 : anchor + 1;
-  return [...messages.slice(0, position), welcome, ...messages.slice(position)];
+/**
+ * Merges the displayed service-request exchange into the saved history: the
+ * welcome after its anchor message, then for each answer the client's choice
+ * followed by the next question (or the summary) after the message that was
+ * last when it was chosen. Entries whose anchor is no longer loaded go first.
+ */
+function withServiceRequest(messages: ChatMessage[], context: ServiceRequestContext, locale: Locale): ChatMessage[] {
+  const entries: Array<{ afterMessageId: string | null; message: ChatMessage }> = [
+    { afterMessageId: context.afterMessageId, message: { id: SERVICE_REQUEST_WELCOME_ID, sender: "ASSISTANT", body: SERVICE_REQUEST_WELCOME[locale], language: locale, createdAt: context.startedAt } },
+  ];
+  for (const event of context.answerLog) {
+    const next = nextServiceRequestStep(event.step);
+    const answer = context.answers[SERVICE_REQUEST_QUESTIONS[event.step].answerKey];
+    entries.push(
+      { afterMessageId: event.afterMessageId, message: { id: `service-request-answer-${event.step}`, sender: "CLIENT", body: optionLabel(event.step, answer, locale), language: locale, createdAt: event.answeredAt } },
+      { afterMessageId: event.afterMessageId, message: { id: `service-request-${next.toLowerCase()}`, sender: "ASSISTANT", body: isQuestionStep(next) ? SERVICE_REQUEST_QUESTIONS[next].question[locale] : serviceRequestSummary(context.answers, locale), language: locale, createdAt: event.answeredAt } },
+    );
+  }
+  const loaded = new Set(messages.map((message) => message.id));
+  const placed = (anchor: string | null) => entries.filter((entry) => entry.afterMessageId === anchor).map((entry) => entry.message);
+  const orphans = entries.filter((entry) => entry.afterMessageId === null || !loaded.has(entry.afterMessageId)).map((entry) => entry.message);
+  return [...orphans, ...messages.flatMap((message) => [message, ...placed(message.id)])];
 }
 
 function formatTime(value: string, locale: Locale): string {
