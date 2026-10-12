@@ -6,19 +6,22 @@
  * stand-in for /api/chat that keeps the saved conversation in memory. The
  * service-request welcome is displayed, never saved, so these tests pin where
  * it appears, what sessionStorage holds, and that a refresh does not ask the
- * first question again.
+ * first question again. Free text that matches no option is answered by the
+ * assistant AND followed by the clarification message with the available
+ * options — the request itself is never advanced by a guess.
  */
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AssistantChat } from "../src/components/assistant-chat";
+import { AssistantChat, SERVICE_REQUEST_WELCOME } from "../src/components/assistant-chat";
 
-const WELCOME_AR = "أهلاً بك في أفق 👋\nأنا مساعد أفق، راح أساعدك تجهّز طلبك خطوة بخطوة.\n\nأول شي: شنو نوع الخدمة اللي تحتاجها؟ (تصميم / إعلانات / سوشيال ميديا / محتوى / SEO / غير ذلك)";
-const WELCOME_EN = "Welcome to Ofoq 👋\nI'm the Ofoq assistant, and I'll help you build your request step by step.\n\nFirst: what type of service do you need? (Design / Ads / Social media / Content / SEO / Other)";
+const WELCOME_AR = SERVICE_REQUEST_WELCOME.ar;
+const WELCOME_EN = SERVICE_REQUEST_WELCOME.en;
 const STORAGE_KEY = "ofoq:chat:service-request";
 const REPLY = "ممتاز، خلينا نعرف تفاصيل أكثر عن التصميم.";
-/** Free text that is not one of the TYPE options, so it goes to the assistant like any message. */
-const FREE_TEXT = "أحتاج تصميم شعار لمطعمي";
+/** Free text that names no option, so it goes to the assistant like any message. */
+const FREE_TEXT = "هلا شلونكم";
+const CLARIFICATION_START = "ما قدرت أحدد الخيار";
 
 interface SavedMessage { id: string; sender: string; body: string; language: string; createdAt: string }
 
@@ -30,7 +33,8 @@ let saved: SavedMessage[] = [];
 let conversationId = "conv-1";
 
 function stubChatApi(): void {
-  vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    if (String(url).includes("service-intent")) return Response.json({ data: { optionId: null, source: "none" } });
     if (init?.method === "POST") {
       const { message } = JSON.parse(String(init.body)) as { message: string };
       const userMessage: SavedMessage = { id: `m-${saved.length + 1}`, sender: "CLIENT", body: message, language: "ar", createdAt: "2026-10-12T05:01:00.000Z" };
@@ -38,7 +42,7 @@ function stubChatApi(): void {
       saved = [...saved, userMessage, reply];
       return Response.json({ data: { conversationId, userMessage, reply, provider: "rules", providerAvailable: false, escalated: false } });
     }
-    return Response.json({ data: { conversationId, customerName: "امجد", language: "ar", messages: saved }, provider: { configured: false } });
+    return Response.json({ data: { conversationId, customerName: "امجد", email: "client@example.com", language: "ar", messages: saved }, provider: { configured: false } });
   }));
 }
 
@@ -71,7 +75,7 @@ describe("chat opened from «اطلب خدمة جديدة» (?intent=service_req
     render(<AssistantChat locale="ar" intent="service_request" />);
 
     await waitFor(() => expect(shownBodies()).toEqual([greeting.body, WELCOME_AR]));
-    expect(storedContext()).toMatchObject({ intent: "service_request", conversationId: "conv-1", afterMessageId: "m-greeting" });
+    expect(storedContext()).toMatchObject({ intent: "service_request", conversationId: "conv-1", afterMessageId: "m-greeting", step: "TYPE" });
     // The hint note stays; the generic starter suggestions give way to the first question's options.
     expect(document.querySelector(".chat-context-note")).not.toBeNull();
     expect(screen.queryByRole("button", { name: "أريد معرفة الأسعار" })).toBeNull();
@@ -85,16 +89,21 @@ describe("chat opened from «اطلب خدمة جديدة» (?intent=service_req
     const composer = screen.getByRole("textbox");
     fireEvent.change(composer, { target: { value: FREE_TEXT } });
     fireEvent.submit(composer.closest("form")!);
-    await waitFor(() => expect(shownBodies()).toEqual([greeting.body, WELCOME_AR, FREE_TEXT, REPLY]));
+    // The assistant answers, and the request shows its options again without
+    // advancing: nothing was guessed and nothing was saved.
+    await waitFor(() => expect(shownBodies()).toContain(REPLY));
+    expect(shownBodies().at(-1)).toContain(CLARIFICATION_START);
+    expect(storedContext()).toMatchObject({ step: "TYPE", answers: {} });
     // The welcome is displayed only; the API was asked to save the client's message alone.
-    const post = vi.mocked(fetch).mock.calls.find(([, init]) => init?.method === "POST");
+    const post = vi.mocked(fetch).mock.calls.find(([url, init]) => init?.method === "POST" && String(url).endsWith("/api/chat"));
     expect(JSON.parse(String(post?.[1]?.body))).toEqual({ message: FREE_TEXT });
 
     // Refresh: the page loads again with the same URL and the answer is now saved history.
     cleanup();
     render(<AssistantChat locale="ar" intent="service_request" />);
-    await waitFor(() => expect(shownBodies()).toEqual([greeting.body, WELCOME_AR, FREE_TEXT, REPLY]));
+    await waitFor(() => expect(shownBodies()).toContain(FREE_TEXT));
     expect(shownBodies().filter((body) => body === WELCOME_AR)).toHaveLength(1);
+    expect(shownBodies().indexOf(WELCOME_AR)).toBeLessThan(shownBodies().indexOf(FREE_TEXT));
   });
 
   it("starts after the latest saved message for a client with an existing conversation", async () => {

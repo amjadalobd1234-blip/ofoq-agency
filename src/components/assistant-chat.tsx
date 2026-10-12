@@ -3,16 +3,53 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 
 import {
-  calculateServiceEstimate,
-  formatCount,
-  formatUsd,
-  type BudgetBand,
-  type PricingInput,
-  type PricingServiceType,
-  type TargetingArea,
-} from "@/lib/agents/pricing-agent";
+  SERVICE_REQUEST_BASIC_STEPS,
+  SERVICE_REQUEST_ORDER_CODE,
+  SERVICE_REQUEST_QUESTIONS,
+  SERVICE_REQUEST_STEPS,
+  SERVICE_REQUEST_WELCOME,
+  answerServiceRequest,
+  currentQuestionStep,
+  isQuestionStep,
+  matchServiceOption,
+  optionLabel,
+  replayServiceRequest,
+  requestPricingInput,
+  serviceRequestClarification,
+  serviceRequestConfirmation,
+  serviceRequestEstimate,
+  serviceRequestSummary,
+  submitWhatsappNumber,
+  whatsappNumberPrompt,
+  type ServiceRequestAnswerKey,
+  type ServiceRequestAnswers,
+  type ServiceRequestOption,
+  type ServiceRequestQuestionStep,
+  type ServiceRequestState,
+  type ServiceRequestStep,
+} from "@/lib/agents/service-request";
 import type { Locale } from "@/lib/domain/types";
 import { dictionaries } from "@/lib/i18n/dictionaries";
+
+// The guided request lives in `@/lib/agents/service-request` so it can be tested
+// without the DOM; these re-exports keep the chat's public surface unchanged.
+export {
+  SERVICE_REQUEST_BASIC_STEPS,
+  SERVICE_REQUEST_ORDER_CODE,
+  SERVICE_REQUEST_QUESTIONS,
+  SERVICE_REQUEST_STEPS,
+  SERVICE_REQUEST_WELCOME,
+  currentQuestionStep,
+  isQuestionStep,
+  matchServiceOption,
+  optionLabel,
+  serviceRequestClarification,
+  serviceRequestConfirmation,
+  serviceRequestEstimate,
+  serviceRequestSummary,
+  whatsappNumberPrompt,
+};
+export type { ServiceRequestAnswers, ServiceRequestQuestionStep, ServiceRequestStep };
 
 interface ChatMessage {
   id: string;
@@ -35,317 +72,60 @@ interface ServiceRequestContext {
   /** Last saved message when the request started: the welcome is shown right after it. */
   afterMessageId: string | null;
   startedAt: string;
-  /** The question waiting for an answer, or SUMMARY once every question was answered. */
   step: ServiceRequestStep;
   /** Chosen option ids (language independent), e.g. { type: "design", size: "small" }. */
   answers: ServiceRequestAnswers;
-  /** When each answer was given and which saved message was last at that moment, so the exchange stays in place. */
+  /** When each answer was given and which saved message was last at that moment. */
   answerLog: ServiceRequestAnswerEvent[];
+  /** True after a rejected WhatsApp number, so the rejection can be shown again. */
+  phoneError: boolean;
+  /** Registered client email, used in the pricing message and the confirmation. */
+  email: string | null;
+  completedAt: string | null;
 }
 
-export type ServiceRequestStep =
-  | "TYPE"
-  | "SIZE"
-  | "PLATFORMS"
-  | "DEADLINE"
-  | "BUDGET"
-  | "BUSINESS_TYPE"
-  | "PRICE_RANGE"
-  | "TARGETING"
-  | "SUMMARY";
-/** Every step except SUMMARY asks one question. */
-export type ServiceRequestQuestionStep = Exclude<ServiceRequestStep, "SUMMARY">;
-export type ServiceRequestAnswerKey = "type" | "size" | "platforms" | "deadline" | "budget" | "businessType" | "priceRange" | "targeting";
-export type ServiceRequestAnswers = Partial<Record<ServiceRequestAnswerKey, string>>;
-
 interface ServiceRequestAnswerEvent {
-  step: ServiceRequestQuestionStep;
+  step: ServiceRequestStep;
+  optionId?: string;
   afterMessageId: string | null;
   answeredAt: string;
 }
-
-interface ServiceRequestOption {
-  id: string;
-  label: Record<Locale, string>;
-}
-
-interface ServiceRequestQuestion {
-  answerKey: ServiceRequestAnswerKey;
-  question: Record<Locale, string>;
-  options: ServiceRequestOption[];
-}
-
-export const SERVICE_REQUEST_STEPS: readonly ServiceRequestStep[] = [
-  "TYPE",
-  "SIZE",
-  "PLATFORMS",
-  "DEADLINE",
-  "BUDGET",
-  "BUSINESS_TYPE",
-  "PRICE_RANGE",
-  "TARGETING",
-  "SUMMARY",
-];
-
-/** The guided questions of a service request, in order. Option ids are what gets stored; labels are what the client sees. */
-export const SERVICE_REQUEST_QUESTIONS: Record<ServiceRequestQuestionStep, ServiceRequestQuestion> = {
-  TYPE: {
-    answerKey: "type",
-    question: { ar: "شنو نوع الخدمة اللي تحتاجها؟", en: "What type of service do you need?" },
-    options: [
-      { id: "design", label: { ar: "تصميم", en: "Design" } },
-      { id: "ads", label: { ar: "إعلانات", en: "Ads" } },
-      { id: "social_media", label: { ar: "سوشيال ميديا", en: "Social media" } },
-      { id: "content", label: { ar: "محتوى", en: "Content" } },
-      { id: "seo", label: { ar: "SEO", en: "SEO" } },
-      { id: "other", label: { ar: "غير ذلك", en: "Other" } },
-    ],
-  },
-  SIZE: {
-    answerKey: "size",
-    question: { ar: "شكد حجم المشروع؟", en: "How big is the project?" },
-    options: [
-      { id: "small", label: { ar: "صغير", en: "Small" } },
-      { id: "medium", label: { ar: "متوسط", en: "Medium" } },
-      { id: "large", label: { ar: "كبير", en: "Large" } },
-    ],
-  },
-  PLATFORMS: {
-    answerKey: "platforms",
-    question: { ar: "على أي منصات تريد نشتغل؟", en: "Which platforms should we work on?" },
-    options: [
-      { id: "instagram", label: { ar: "Instagram", en: "Instagram" } },
-      { id: "tiktok", label: { ar: "TikTok", en: "TikTok" } },
-      { id: "facebook", label: { ar: "Facebook", en: "Facebook" } },
-      { id: "google", label: { ar: "Google", en: "Google" } },
-      { id: "multiple", label: { ar: "متعدد", en: "Multiple" } },
-    ],
-  },
-  DEADLINE: {
-    answerKey: "deadline",
-    question: { ar: "شكد وقت عندك للتسليم؟", en: "How much time do you have for delivery?" },
-    options: [
-      { id: "standard_7_days", label: { ar: "عادي (7 أيام)", en: "Standard (7 days)" } },
-      { id: "urgent_3_days", label: { ar: "مستعجل (3 أيام)", en: "Urgent (3 days)" } },
-      { id: "flexible_14_days", label: { ar: "مرن (14 يوم)", en: "Flexible (14 days)" } },
-    ],
-  },
-  BUDGET: {
-    answerKey: "budget",
-    question: { ar: "شنو الميزانية التقريبية؟", en: "What is your approximate budget?" },
-    options: [
-      { id: "under_200", label: { ar: "أقل من 200$", en: "Under $200" } },
-      { id: "200_500", label: { ar: "200-500$", en: "$200-500" } },
-      { id: "500_1500", label: { ar: "500-1500$", en: "$500-1500" } },
-      { id: "over_1500", label: { ar: "أكثر من 1500$", en: "Over $1500" } },
-    ],
-  },
-  BUSINESS_TYPE: {
-    answerKey: "businessType",
-    question: { ar: "شنو نوع مشروعك؟", en: "What kind of business do you have?" },
-    options: [
-      { id: "online_store", label: { ar: "🛍️ متجر إلكتروني", en: "🛍️ Online store" } },
-      { id: "local_store", label: { ar: "🏪 متجر محلي", en: "🏪 Local shop" } },
-      { id: "restaurant", label: { ar: "🍽️ مطعم/مقهى", en: "🍽️ Restaurant/café" } },
-      { id: "service", label: { ar: "💼 خدمة (استشارات، تعليم، تصميم)", en: "💼 Service (consulting, education, design)" } },
-      { id: "real_estate", label: { ar: "🏗️ عقارات/سيارات", en: "🏗️ Real estate/cars" } },
-      { id: "luxury", label: { ar: "💎 منتجات فاخرة", en: "💎 Luxury products" } },
-      { id: "other", label: { ar: "🌐 شي ثاني", en: "🌐 Something else" } },
-    ],
-  },
-  PRICE_RANGE: {
-    answerKey: "priceRange",
-    question: { ar: "شكد سعر منتجاتك تقريباً؟", en: "How much do your products usually cost?" },
-    options: [
-      { id: "under_50k", label: { ar: "أقل من 50,000 دينار", en: "Under IQD 50,000" } },
-      { id: "50k_150k", label: { ar: "50,000 - 150,000", en: "IQD 50,000 - 150,000" } },
-      { id: "150k_500k", label: { ar: "150,000 - 500,000", en: "IQD 150,000 - 500,000" } },
-      { id: "over_500k", label: { ar: "أكثر من 500,000", en: "Over IQD 500,000" } },
-    ],
-  },
-  TARGETING: {
-    answerKey: "targeting",
-    question: { ar: "وين تريد تستهدف إعلانك؟", en: "Where would you like to target your campaign?" },
-    options: [
-      { id: "iraq_all", label: { ar: "🇮🇶 العراق كله", en: "🇮🇶 All Iraq" } },
-      { id: "baghdad", label: { ar: "🏙️ بغداد فقط", en: "🏙️ Baghdad only" } },
-      { id: "basra", label: { ar: "🌊 البصرة فقط", en: "🌊 Basra only" } },
-      { id: "three_cities", label: { ar: "🏙️ بغداد + البصرة + أربيل", en: "🏙️ Baghdad + Basra + Erbil" } },
-      { id: "gulf", label: { ar: "🌍 الخليج (السعودية، الإمارات، الكويت)", en: "🌍 Gulf (Saudi Arabia, UAE, Kuwait)" } },
-      { id: "arabic_global", label: { ar: "🌐 عربي عام", en: "🌐 General Arabic-speaking audience" } },
-    ],
-  },
-};
-
-/** The service option ids of the TYPE question as the pricing agent's service types. */
-const SERVICE_TYPE_BY_OPTION: Record<string, PricingServiceType> = {
-  design: "design",
-  ads: "ads",
-  social_media: "social",
-  content: "content",
-  seo: "seo",
-  other: "other",
-};
 
 const SERVICE_REQUEST_STORAGE_KEY = "ofoq:chat:service-request";
 const SERVICE_REQUEST_WELCOME_ID = "service-request-welcome";
 /** The closing assistant message of a completed request: the price estimation. */
 const SERVICE_REQUEST_ESTIMATE_ID = "service-request-estimate";
-/** First assistant message of a service request. Displayed in the chat only; it is not saved to the conversation. */
-const SERVICE_REQUEST_WELCOME: Record<Locale, string> = {
-  ar: "أهلاً بك في أفق 👋\nأنا مساعد أفق، راح أساعدك تجهّز طلبك خطوة بخطوة.\n\nأول شي: شنو نوع الخدمة اللي تحتاجها؟ (تصميم / إعلانات / سوشيال ميديا / محتوى / SEO / غير ذلك)",
-  en: "Welcome to Ofoq 👋\nI'm the Ofoq assistant, and I'll help you build your request step by step.\n\nFirst: what type of service do you need? (Design / Ads / Social media / Content / SEO / Other)",
-};
+const SERVICE_REQUEST_CLARIFICATION_ID = "service-request-clarification";
+const SERVICE_REQUEST_PHONE_ERROR_ID = "service-request-phone-error";
 
-/** Shown after the last answer; the estimate follows it immediately. */
-function serviceRequestSummary(answers: ServiceRequestAnswers, locale: Locale): string {
-  const label = (step: ServiceRequestQuestionStep) => optionLabel(step, answers[SERVICE_REQUEST_QUESTIONS[step].answerKey], locale);
-  return locale === "ar"
-    ? `تمام، فهمت طلبك 👌\n\n- الخدمة: ${label("TYPE")}\n- الحجم: ${label("SIZE")}\n- المنصات: ${label("PLATFORMS")}\n- التسليم: ${label("DEADLINE")}\n- الميزانية: ${label("BUDGET")}\n- نوع المشروع: ${label("BUSINESS_TYPE")}\n- سعر المنتج: ${label("PRICE_RANGE")}\n- المنطقة المستهدفة: ${label("TARGETING")}\n\nخليني أحسب لك تقديراً واضحاً...`
-    : `Great, I've got your request 👌\n\n- Service: ${label("TYPE")}\n- Size: ${label("SIZE")}\n- Platforms: ${label("PLATFORMS")}\n- Delivery: ${label("DEADLINE")}\n- Budget: ${label("BUDGET")}\n- Business type: ${label("BUSINESS_TYPE")}\n- Product price: ${label("PRICE_RANGE")}\n- Target area: ${label("TARGETING")}\n\nLet me prepare a clear estimate...`;
-}
-
-function optionLabel(step: ServiceRequestQuestionStep, optionId: string | undefined, locale: Locale): string {
-  return SERVICE_REQUEST_QUESTIONS[step].options.find((option) => option.id === optionId)?.label[locale] ?? optionId ?? "";
-}
-
-function nextServiceRequestStep(step: ServiceRequestStep): ServiceRequestStep {
-  return SERVICE_REQUEST_STEPS[Math.min(SERVICE_REQUEST_STEPS.indexOf(step) + 1, SERVICE_REQUEST_STEPS.length - 1)];
-}
-
-function isQuestionStep(step: ServiceRequestStep): step is ServiceRequestQuestionStep {
-  return step !== "SUMMARY";
-}
-
-/** True once every question has an answer: only then can the estimate be shown. */
-export function isServiceRequestComplete(answers: ServiceRequestAnswers): boolean {
-  return SERVICE_REQUEST_STEPS.filter(isQuestionStep).every(
-    (step) => Boolean(answers[SERVICE_REQUEST_QUESTIONS[step].answerKey]),
-  );
-}
-
-/**
- * Convert the guided answers into the pricing agent's input. Every value is
- * checked against the choices actually offered, so edited session storage can
- * never select an unpublished service or targeting multiplier.
- */
-export function requestPricingInput(answers: ServiceRequestAnswers): PricingInput {
-  const budget: BudgetBand = isBudgetBand(answers.budget) ? answers.budget : "under_200";
-  const targeting = SERVICE_REQUEST_QUESTIONS.TARGETING.options.some((option) => option.id === answers.targeting)
-    ? answers.targeting as TargetingArea
-    : "iraq_all";
+function serviceRequestState(context: ServiceRequestContext): ServiceRequestState {
   return {
-    type: SERVICE_TYPE_BY_OPTION[answers.type ?? "other"] ?? "other",
-    size: answers.size === "small" || answers.size === "large" ? answers.size : "medium",
-    platforms: answers.platforms === "multiple" ? "multiple" : "single",
-    deadline:
-      answers.deadline === "urgent_3_days" ? "urgent" : answers.deadline === "flexible_14_days" ? "flexible" : "normal",
-    budget,
-    targeting,
+    step: context.step,
+    answers: context.answers,
+    answerLog: context.answerLog.map((event) => ({ step: event.step, answeredAt: event.answeredAt })),
+    completedAt: context.completedAt,
   };
 }
 
-function isBudgetBand(value: string | undefined): value is BudgetBand {
-  return value === "under_200" || value === "200_500" || value === "500_1500" || value === "over_1500";
-}
-
-function contactOptions(locale: Locale): string[] {
-  return locale === "ar"
-    ? [
-        "كيف تحب يتواصل معك فريق أفق؟",
-        "□ 📱 واتساب",
-        "□ 📧 إيميل: البريد المسجّل بحسابك",
-        "□ 💬 إشعار في الموقع",
-      ]
-    : [
-        "How would you like the Ofoq team to contact you?",
-        "□ 📱 WhatsApp",
-        "□ 📧 Email: the address registered to your account",
-        "□ 💬 In-app notification",
-      ];
-}
-
-/** The final, client-facing message after the nine-step guided request. */
-export function serviceRequestEstimate(answers: ServiceRequestAnswers, locale: Locale): string {
-  const result = calculateServiceEstimate(requestPricingInput(answers));
-  const ar = locale === "ar";
-  const contact = contactOptions(locale);
-
-  if (result.service === "ads" && result.resultsKind === "numbers") {
-    const reach = result.expectedReach ?? [0, 0];
-    const visits = result.expectedVisits ?? [0, 0];
-    const leads = result.expectedLeads ?? [0, 0];
-    const formatRange = ([min, max]: [number, number]) => `~${formatCount(min, locale)}-${formatCount(max, locale)}`;
-    const lines = [
-      `${ar ? "ميزانيتك" : "Your budget"}: ${formatUsd(result.budgetAmount, locale)} ${ar ? "شهرياً" : "per month"} ${result.budgetEmoji}`,
-    ];
-
-    if (result.budgetQuality === "weak" || result.budgetQuality === "medium") {
-      lines.push(
-        "",
-        ar ? "💡 صريحين معك:" : "💡 To be transparent:",
-        `${formatUsd(result.budgetAmount, locale)} ${ar ? `تكفي لـ ${result.estimatedAdDays} يوم إعلان فعّال.` : `covers about ${result.estimatedAdDays} active ad days.`}`,
-        "",
-        ar ? "📊 النتائج المتوقعة:" : "📊 Expected results:",
-      );
-    } else {
-      lines.push("", ar ? "📊 النتائج المتوقعة شهرياً:" : "📊 Expected monthly results:");
-    }
-
-    lines.push(
-      ar ? `• الظهور: ${formatRange(reach)}` : `• Impressions: ${formatRange(reach)}`,
-      ar ? `• الزيارات: ${formatRange(visits)}` : `• Visits: ${formatRange(visits)}`,
-      ar ? `• المهتمون: ${formatRange(leads)}` : `• Interested people: ${formatRange(leads)}`,
-      "",
-      ar ? "الأرقام تقديرية وليست ضماناً للنتائج." : "These are conservative estimates, not guaranteed results.",
-      "",
-      ...contact,
-    );
-    return lines.join("\n");
-  }
-
-  if (result.minPrice === null || result.maxPrice === null) {
-    return [
-      ar
-        ? "ما عندنا نطاق سعر معتمد لهذا النوع، وما راح نخمن رقماً. يحتاج الطلب مراجعة تفاصيله قبل تحديد السعر."
-        : "We do not have an approved price range for this request, so we will not guess. The scope needs review before a price can be set.",
-      "",
-      ...contact,
-    ].join("\n");
-  }
-
-  return [
-    `${ar ? "السعر التقديري" : "Estimated price"}: ${formatUsd(result.minPrice, locale)}-${formatUsd(result.maxPrice, locale)}`,
-    "",
-    ...contact,
-  ].join("\n");
+/** True once every question the request needs has an answer. */
+export function isServiceRequestComplete(answers: ServiceRequestAnswers): boolean {
+  return SERVICE_REQUEST_BASIC_STEPS.every((step) => Boolean(answers[SERVICE_REQUEST_QUESTIONS[step].answerKey]));
 }
 
 /**
- * The option of `step` a typed message stands for, if any: it must be the whole
- * message and equal an option's Arabic label, English label or id ("تصميم",
- * "Design", "design"). Case, extra spaces, trailing punctuation, "_"/"-" and
- * Arabic letter variants (أ/إ/آ, ة/ه, ى/ي, tatweel) are ignored.
+ * The pricing input of a stored request. Every value is checked against the
+ * choices actually offered, so edited session storage can never select an
+ * unpublished service or targeting multiplier.
  */
-export function matchServiceOption(step: ServiceRequestQuestionStep, text: string): string | null {
-  const typed = normalizeAnswer(text);
-  if (!typed) return null;
-  const match = SERVICE_REQUEST_QUESTIONS[step].options.find((option) =>
-    [option.id, option.label.ar, option.label.en].some((candidate) => normalizeAnswer(candidate) === typed));
-  return match?.id ?? null;
-}
+export { requestPricingInput };
 
-function normalizeAnswer(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/\u0640/g, "")
-    .replace(/[أإآ]/g, "ا")
-    .replace(/ة/g, "ه")
-    .replace(/ى/g, "ي")
-    .replace(/[_\-–]/g, " ")
-    .replace(/[.!?؟،,؛;]+$/u, "")
-    .replace(/\s+/g, " ")
-    .trim();
+/** The contact prompt of an option; the email is shown when it is known. */
+export function contactOptionLabel(option: ServiceRequestOption, locale: Locale, email?: string | null): string {
+  const label = locale === "ar" ? option.labelAr : option.labelEn;
+  if (option.id !== "email") return label;
+  const address = email?.trim();
+  if (!address) return label;
+  return `${label}: ${address}`;
 }
 
 /** Service-request chat using the fixed public pricing table. */
@@ -364,6 +144,8 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
   const [escalated, setEscalated] = useState(false);
   /** Set only when the chat was opened with ?intent=service_request. */
   const [serviceRequest, setServiceRequest] = useState<ServiceRequestContext | null>(null);
+  /** Shown when neither the matcher nor the AI could name an option. */
+  const [clarification, setClarification] = useState("");
   const tailRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -374,9 +156,10 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
         if (!response.ok) throw new Error(payload.error || "Unable to open chat.");
         const loadedConversationId: string = payload.data?.conversationId || "";
         const loadedMessages: ChatMessage[] = Array.isArray(payload.data?.messages) ? payload.data.messages : [];
+        const email: string | null = typeof payload.data?.email === "string" ? payload.data.email : null;
         setConversationId(loadedConversationId);
         setMessages(loadedMessages);
-        setServiceRequest(intent === "service_request" ? openServiceRequest(loadedConversationId, loadedMessages) : null);
+        setServiceRequest(intent === "service_request" ? openServiceRequest(loadedConversationId, loadedMessages, email) : null);
         setProviderAvailable(Boolean(payload.provider?.configured));
         setReady(true);
       })
@@ -387,22 +170,96 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
     return () => controller.abort();
   }, [intent]);
 
-  useEffect(() => { tailRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [messages, sending]);
+  useEffect(() => { tailRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [messages, sending, clarification]);
+
+  /**
+   * Asks the AI (Groq first, through the provider chain) which service type the
+   * client means. Only a published option id is accepted; anything else is null.
+   */
+  async function askAiForServiceType(message: string): Promise<string | null> {
+    try {
+      const response = await fetch("/api/chat/service-intent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+      if (!response.ok) return null;
+      const payload = await response.json();
+      const optionId: unknown = payload?.data?.optionId;
+      return SERVICE_REQUEST_QUESTIONS.TYPE.options.some((option) => option.id === optionId) ? (optionId as string) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Reports the finished request so the team alert and the owner email are created. */
+  async function reportCompletedRequest(context: ServiceRequestContext): Promise<void> {
+    try {
+      await fetch("/api/chat/service-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answers: context.answers, locale, conversationId: context.conversationId }),
+      });
+    } catch {
+      // The client already has the confirmation and the order reference: a
+      // reporting failure must never block the conversation.
+    }
+  }
 
   async function sendMessage(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     const message = input.trim();
     if (!message || sending || loading || !ready) return;
-    // A typed answer that names an option of the open question counts as choosing it (same as the button).
-    const typedOption = serviceRequest && isQuestionStep(serviceRequest.step) ? matchServiceOption(serviceRequest.step, message) : null;
-    if (typedOption) {
-      setError("");
-      setInput("");
-      chooseServiceOption(typedOption);
-      return;
+
+    // A guided request answers through the same composer: typed text is matched
+    // against the options of the open question (exact → partial → AI intent).
+    if (serviceRequest) {
+      if (serviceRequest.step === "PHONE") {
+        setError("");
+        setInput("");
+        applyPhoneNumber(message);
+        return;
+      }
+      const openStep = currentQuestionStep(serviceRequestState(serviceRequest));
+      if (openStep) {
+        const step = openStep;
+        const typed = matchServiceOption(step, message);
+        if (typed) {
+          setError("");
+          setInput("");
+          setClarification("");
+          chooseServiceOption(typed);
+          return;
+        }
+        if (step === "TYPE") {
+          setSending(true);
+          const aiOption = await askAiForServiceType(message);
+          setSending(false);
+          if (aiOption) {
+            setError("");
+            setInput("");
+            setClarification("");
+            chooseServiceOption(aiOption);
+            return;
+          }
+        }
+        // Nothing matched (and the AI could not extract an intent): show the
+        // available options again, save no value, and keep the conversation open.
+        setError("");
+        setInput("");
+        setClarification(serviceRequestClarification(step, locale));
+        void sendToAssistant(message);
+        return;
+      }
     }
+
     setError("");
     setInput("");
+    await sendToAssistant(message);
+  }
+
+  /** Normal (unmatched) chat turn: saved to the conversation and answered by the assistant. */
+  async function sendToAssistant(message: string) {
     setSending(true);
     const tempId = `pending-${Date.now()}`;
     const optimistic: ChatMessage = { id: tempId, sender: "CLIENT", body: message, language: locale, createdAt: new Date().toISOString() };
@@ -438,21 +295,67 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
   /**
    * A guided answer, from a button or a typed message that matches an option:
    * saved in the request context (and sessionStorage), then the next question —
-   * or the summary after BUDGET — is shown. Nothing is sent to the API.
+   * or the summary/confirmation — is shown. Nothing is sent to the API.
    */
   function chooseServiceOption(optionId: string) {
-    if (!serviceRequest || sending || !isQuestionStep(serviceRequest.step)) return;
-    const step = serviceRequest.step;
+    if (!serviceRequest || sending) return;
+    const step = currentQuestionStep(serviceRequestState(serviceRequest));
+    if (!step) return;
     const question = SERVICE_REQUEST_QUESTIONS[step];
     if (!question.options.some((option) => option.id === optionId)) return;
-    const next: ServiceRequestContext = {
+    const next = answerServiceRequest(serviceRequestState(serviceRequest), optionId);
+    const context: ServiceRequestContext = {
       ...serviceRequest,
-      step: nextServiceRequestStep(step),
-      answers: { ...serviceRequest.answers, [question.answerKey]: optionId },
-      answerLog: [...serviceRequest.answerLog, { step, afterMessageId: messages.length > 0 ? messages[messages.length - 1].id : null, answeredAt: new Date().toISOString() }],
+      step: next.step,
+      answers: next.answers,
+      completedAt: next.completedAt ?? null,
+      phoneError: false,
+      answerLog: [
+        ...serviceRequest.answerLog,
+        {
+          step,
+          optionId,
+          afterMessageId: messages.length > 0 ? messages[messages.length - 1].id : null,
+          answeredAt: new Date().toISOString(),
+        },
+      ],
     };
-    setServiceRequest(next);
-    saveServiceRequest(next);
+    setClarification("");
+    setServiceRequest(context);
+    saveServiceRequest(context);
+    if (context.step === "DONE") void reportCompletedRequest(context);
+  }
+
+  /** Saves the WhatsApp number, or asks for it again when it is not valid. */
+  function applyPhoneNumber(raw: string) {
+    if (!serviceRequest) return;
+    const attempt = submitWhatsappNumber(serviceRequestState(serviceRequest), raw);
+    if (attempt.error) {
+      setError("");
+      const rejected = { ...serviceRequest, phoneError: true };
+      setServiceRequest(rejected);
+      saveServiceRequest(rejected);
+      return;
+    }
+    const context: ServiceRequestContext = {
+      ...serviceRequest,
+      step: attempt.state.step,
+      answers: attempt.state.answers,
+      phoneError: false,
+      completedAt: attempt.state.completedAt ?? null,
+      answerLog: [
+        ...serviceRequest.answerLog,
+        {
+          step: "PHONE",
+          afterMessageId: messages.length > 0 ? messages[messages.length - 1].id : null,
+          answeredAt: new Date().toISOString(),
+        },
+      ],
+    };
+    setClarification("");
+    setServiceRequest(context);
+    saveServiceRequest(context);
+    void reportCompletedRequest(context);
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -462,10 +365,13 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
     }
   }
 
-  // The service-request exchange is displayed, not saved: the welcome sits after the message that was last when the
-  // request started, and each answer (with the question that follows it) after the message that was last when it was chosen.
-  const visibleMessages = serviceRequest ? withServiceRequest(messages, serviceRequest, locale) : messages;
-  const pendingQuestion = serviceRequest && isQuestionStep(serviceRequest.step) ? SERVICE_REQUEST_QUESTIONS[serviceRequest.step] : null;
+  // The service-request exchange is displayed, not saved: each answer and the
+  // message that follows it sit after the message that was last when it was
+  // given, and the pricing message follows the summary.
+  const visibleMessages = serviceRequest ? withServiceRequest(messages, serviceRequest, locale, clarification) : messages;
+  const openQuestionStep = serviceRequest ? currentQuestionStep(serviceRequestState(serviceRequest)) : null;
+  const pendingQuestion = openQuestionStep ? SERVICE_REQUEST_QUESTIONS[openQuestionStep] : null;
+  const pendingPhone = serviceRequest?.step === "PHONE";
 
   const quickReplies = ar
     ? ["أريد إدارة حسابات التواصل", "أحتاج إلى موقع إلكتروني", "أريد معرفة الأسعار"]
@@ -480,7 +386,7 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
           <span className="chat-encrypted"><span>◇</span>{ar ? "محادثة خاصة" : "Private chat"}</span>
         </div>
 
-        {intent === "service_request" && <div className="chat-context-note">{ar ? "راح نسألك كم سؤال سريع حتى نفهم مشروعك ونحسب تقديراً واضحاً." : "Answer a few quick questions so we can understand your business and give a clear estimate."}</div>}
+        {intent === "service_request" && <div className="chat-context-note">{ar ? "راح نسألك أربع أسئلة سريعة حتى نفهم مشروعك ونحسب تقديراً واضحاً." : "Four quick questions so we can understand your business and give a clear estimate."}</div>}
         {ready && <div className="chat-provider-note"><span>i</span>{providerAvailable ? (ar ? "المساعد متصل بمزودي الذكاء الاصطناعي (Groq، Gemini، Cohere وغيرها). قد تُرسل رسائل المحادثة إلى المزود لتوليد الرد، ونعود إلى الردود المحلية إذا تعذّرت الخدمة. لا تشارك كلمات مرور أو بيانات دفع." : "The assistant is connected to AI providers (Groq, Gemini, Cohere and others). Conversation messages may be sent to a provider for generation, with local replies as a fallback. Do not share passwords or payment details.") : copy.providerOff}</div>}
         {escalated && <div className="chat-escalation-note" role="status"><span>✔</span>{ar ? "تم تحويل محادثتك إلى فريق أفق البشري: أُنشئ تنبيه في لوحة الوكالة وتم إشعار المالك. سيتواصل معك أحد أعضاء الفريق." : "Your conversation has been handed over to the Ofoq human team: an alert was created in the agency control room and the owner was notified. A team member will contact you."}</div>}
         {error && <div className="form-notice form-notice-error chat-error" role="alert">{error}</div>}
@@ -500,7 +406,9 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
           <div ref={tailRef} />
         </div>
 
-        {pendingQuestion && !loading && <div className="chat-quick-replies chat-service-options" role="group" aria-label={pendingQuestion.question[locale]}>{pendingQuestion.options.map((option) => <button type="button" key={option.id} onClick={() => chooseServiceOption(option.id)} disabled={sending}>{option.label[locale]}</button>)}</div>}
+        {pendingQuestion && !loading && <div className="chat-quick-replies chat-service-options" role="group" aria-label={pendingQuestion.question[locale]}>{pendingQuestion.options.map((option) => <button type="button" key={option.id} onClick={() => chooseServiceOption(option.id)} disabled={sending}>{contactOptionLabel(option, locale, serviceRequest?.email)}</button>)}</div>}
+
+        {pendingPhone && !loading && <div className="chat-quick-replies chat-service-options chat-phone-prompt" role="group" aria-label={ar ? "رقم واتساب" : "WhatsApp number"}><span>{whatsappNumberPrompt(locale)}</span></div>}
 
         {!serviceRequest && messages.length <= 1 && !loading && <div className="chat-quick-replies" aria-label={ar ? "اقتراحات للبدء" : "Suggested prompts"}>{quickReplies.map((reply) => <button type="button" key={reply} onClick={() => setInput(reply)}>{reply}</button>)}</div>}
 
@@ -532,9 +440,9 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
  * (e.g. after a refresh); otherwise starts a new one right after the last saved
  * message and keeps it in sessionStorage.
  */
-function openServiceRequest(conversationId: string, messages: ChatMessage[]): ServiceRequestContext {
+function openServiceRequest(conversationId: string, messages: ChatMessage[], email: string | null): ServiceRequestContext {
   const stored = readServiceRequest();
-  if (stored && stored.conversationId === conversationId) return stored;
+  if (stored && stored.conversationId === conversationId) return { ...stored, email: stored.email ?? email };
   const context: ServiceRequestContext = {
     intent: "service_request",
     conversationId,
@@ -543,6 +451,9 @@ function openServiceRequest(conversationId: string, messages: ChatMessage[]): Se
     step: "TYPE",
     answers: {},
     answerLog: [],
+    phoneError: false,
+    email,
+    completedAt: null,
   };
   saveServiceRequest(context);
   return context;
@@ -565,18 +476,37 @@ function readServiceRequest(): ServiceRequestContext | null {
     const stored = JSON.parse(window.sessionStorage.getItem(SERVICE_REQUEST_STORAGE_KEY) ?? "null");
     if (stored?.intent !== "service_request" || typeof stored.conversationId !== "string") return null;
     const answerLog: ServiceRequestAnswerEvent[] = Array.isArray(stored.answerLog) ? stored.answerLog : [];
-    // No band is translated for a stored request: the bands are exactly the ones
-    // the question offers, so an answer that is no longer an option makes the
-    // progress inconsistent and the request restarts from TYPE.
     const answers: ServiceRequestAnswers = stored.answers && typeof stored.answers === "object" ? stored.answers : {};
-    const step: ServiceRequestStep = SERVICE_REQUEST_STEPS[answerLog.length];
-    const consistent = answerLog.length < SERVICE_REQUEST_STEPS.length && stored.step === step && answerLog.every((event, index) => {
-      const expected = SERVICE_REQUEST_STEPS[index] as ServiceRequestQuestionStep;
-      const answer = answers[SERVICE_REQUEST_QUESTIONS[expected].answerKey];
-      return event?.step === expected && SERVICE_REQUEST_QUESTIONS[expected].options.some((option) => option.id === answer);
-    });
-    if (consistent) return { ...stored, step, answers, answerLog };
-    const reset = { ...stored, step: "TYPE" as const, answers: {}, answerLog: [] };
+    const step: ServiceRequestStep = SERVICE_REQUEST_STEPS.includes(stored.step) ? stored.step : "TYPE";
+    // The progress is only trusted when replaying its own answers lands exactly
+    // on the stored step: anything else restarts from TYPE.
+    const replayed = answerLog.length <= SERVICE_REQUEST_STEPS.length ? replayServiceRequest(answerLog, answers) : null;
+    if (replayed && replayed.step === step) {
+      return {
+        intent: "service_request",
+        conversationId: stored.conversationId,
+        afterMessageId: typeof stored.afterMessageId === "string" ? stored.afterMessageId : null,
+        startedAt: typeof stored.startedAt === "string" ? stored.startedAt : new Date().toISOString(),
+        step,
+        answers,
+        answerLog,
+        phoneError: Boolean(stored.phoneError),
+        email: typeof stored.email === "string" ? stored.email : null,
+        completedAt: typeof stored.completedAt === "string" ? stored.completedAt : null,
+      };
+    }
+    const reset: ServiceRequestContext = {
+      intent: "service_request",
+      conversationId: stored.conversationId,
+      afterMessageId: typeof stored.afterMessageId === "string" ? stored.afterMessageId : null,
+      startedAt: typeof stored.startedAt === "string" ? stored.startedAt : new Date().toISOString(),
+      step: "TYPE",
+      answers: {},
+      answerLog: [],
+      phoneError: false,
+      email: typeof stored.email === "string" ? stored.email : null,
+      completedAt: null,
+    };
     saveServiceRequest(reset);
     return reset;
   } catch {
@@ -585,47 +515,127 @@ function readServiceRequest(): ServiceRequestContext | null {
 }
 
 /**
+ * The message that follows an answered step: the next question, the summary, the
+ * WhatsApp prompt or the channel confirmation.
+ */
+function followUpMessage(context: ServiceRequestContext, event: ServiceRequestAnswerEvent, locale: Locale): string {
+  switch (event.step) {
+    case "TYPE":
+      return SERVICE_REQUEST_QUESTIONS.SIZE.question[locale];
+    case "SIZE":
+      return SERVICE_REQUEST_QUESTIONS.BUDGET.question[locale];
+    case "BUDGET":
+      return SERVICE_REQUEST_QUESTIONS.TARGETING.question[locale];
+    case "TARGETING":
+      return serviceRequestSummary(context.answers, locale);
+    case "CONTACT":
+      return event.optionId === "whatsapp"
+        ? whatsappNumberPrompt(locale)
+        : serviceRequestConfirmation(context.answers, locale, { email: context.email });
+    default:
+      // PHONE: the request is complete once the number is saved.
+      return serviceRequestConfirmation(context.answers, locale, { email: context.email });
+  }
+}
+
+/** The client's own bubble for an answered step. */
+function answerMessage(context: ServiceRequestContext, event: ServiceRequestAnswerEvent, locale: Locale): string {
+  if (event.step === "PHONE") return context.answers.phone ?? "";
+  if (!event.optionId) return "";
+  return optionLabel(event.step as ServiceRequestQuestionStep, event.optionId, locale);
+}
+
+/**
  * Merges the displayed service-request exchange into the saved history: the
  * welcome after its anchor message, then for each answer the client's choice
- * followed by the next question (or the summary) after the message that was
- * last when it was chosen, and finally — once every question is answered — the
- * price estimation the pricing agent computed. Entries whose anchor is no
- * longer loaded go first.
+ * followed by the next question (or summary/confirmation) after the message that
+ * was last when it was chosen, the pricing message right after the summary, and
+ * the clarification message when the last free-text answer matched no option.
+ * Entries whose anchor is no longer loaded go first.
  */
 function withServiceRequest(
   messages: ChatMessage[],
   context: ServiceRequestContext,
   locale: Locale,
+  clarification: string,
 ): ChatMessage[] {
   const entries: Array<{ afterMessageId: string | null; message: ChatMessage }> = [
     { afterMessageId: context.afterMessageId, message: { id: SERVICE_REQUEST_WELCOME_ID, sender: "ASSISTANT", body: SERVICE_REQUEST_WELCOME[locale], language: locale, createdAt: context.startedAt } },
   ];
-  for (const event of context.answerLog) {
-    const next = nextServiceRequestStep(event.step);
-    const answer = context.answers[SERVICE_REQUEST_QUESTIONS[event.step].answerKey];
-    entries.push(
-      { afterMessageId: event.afterMessageId, message: { id: `service-request-answer-${event.step}`, sender: "CLIENT", body: optionLabel(event.step, answer, locale), language: locale, createdAt: event.answeredAt } },
-      { afterMessageId: event.afterMessageId, message: { id: `service-request-${next.toLowerCase()}`, sender: "ASSISTANT", body: isQuestionStep(next) ? SERVICE_REQUEST_QUESTIONS[next].question[locale] : serviceRequestSummary(context.answers, locale), language: locale, createdAt: event.answeredAt } },
-    );
+  for (const [index, event] of context.answerLog.entries()) {
+    const answer = answerMessage(context, event, locale);
+    if (answer) {
+      entries.push({
+        afterMessageId: event.afterMessageId,
+        message: { id: `service-request-answer-${index}-${event.step}`, sender: "CLIENT", body: answer, language: locale, createdAt: event.answeredAt },
+      });
+    }
+    entries.push({
+      afterMessageId: event.afterMessageId,
+      message: {
+        id: `service-request-${event.step.toLowerCase()}-${index}`,
+        sender: "ASSISTANT",
+        body: followUpMessage(context, event, locale),
+        language: locale,
+        createdAt: event.answeredAt,
+      },
+    });
   }
-  if (isServiceRequestComplete(context.answers)) {
-    // Anchored to the TARGETING answer, i.e. displayed right after the summary.
+
+  // The pricing message is shown as soon as the four basic questions are
+  // answered — right after the summary that closes them.
+  if (isServiceRequestComplete(context.answers) || context.step === "SUMMARY") {
+    const summaryEvent = context.answerLog.find((event) => event.step === "TARGETING");
+    if (summaryEvent) {
+      entries.push({
+        afterMessageId: summaryEvent.afterMessageId,
+        message: {
+          id: SERVICE_REQUEST_ESTIMATE_ID,
+          sender: "ASSISTANT",
+          body: serviceRequestEstimate(context.answers, locale, { email: context.email }),
+          language: locale,
+          createdAt: summaryEvent.answeredAt,
+        },
+      });
+    }
+  }
+
+  if (context.phoneError && context.step === "PHONE") {
     const last = context.answerLog[context.answerLog.length - 1];
     entries.push({
       afterMessageId: last ? last.afterMessageId : context.afterMessageId,
       message: {
-        id: SERVICE_REQUEST_ESTIMATE_ID,
+        id: SERVICE_REQUEST_PHONE_ERROR_ID,
         sender: "ASSISTANT",
-        body: serviceRequestEstimate(context.answers, locale),
+        body: locale === "ar" ? "الرقم غير صحيح، حاول مرة ثانية" : "That number is not valid, please try again",
         language: locale,
         createdAt: last ? last.answeredAt : context.startedAt,
       },
     });
   }
+
   const loaded = new Set(messages.map((message) => message.id));
-  const placed = (anchor: string | null) => entries.filter((entry) => entry.afterMessageId === anchor).map((entry) => entry.message);
-  const orphans = entries.filter((entry) => entry.afterMessageId === null || !loaded.has(entry.afterMessageId)).map((entry) => entry.message);
-  return [...orphans, ...messages.flatMap((message) => [message, ...placed(message.id)])];
+  const placed = (anchor: string | null) =>
+    entries
+      .filter((entry) => entry.afterMessageId === anchor)
+      .map((entry) => entry.message);
+  const orphans = entries
+    .filter((entry) => entry.afterMessageId === null || !loaded.has(entry.afterMessageId))
+    .map((entry) => entry.message);
+  // The clarification («pick one of these») is the newest thing on screen, so it
+  // is always rendered last instead of being anchored to an older message.
+  const clarificationEntry: ChatMessage[] = clarification.trim()
+    ? [
+        {
+          id: SERVICE_REQUEST_CLARIFICATION_ID,
+          sender: "ASSISTANT",
+          body: clarification,
+          language: locale,
+          createdAt: new Date().toISOString(),
+        },
+      ]
+    : [];
+  return [...orphans, ...messages.flatMap((message) => [message, ...placed(message.id)]), ...clarificationEntry];
 }
 
 function formatTime(value: string, locale: Locale): string {

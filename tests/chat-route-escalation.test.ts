@@ -22,6 +22,8 @@ let escalateResponse: { data: unknown; error: { code: string; message: string } 
 /** The conversation the RPC hands back; each test sets the context it needs. */
 let history: Array<{ role: string; content: string }> = [];
 let latestMessage = "";
+/** What `ofoq_client_chat_bootstrap` returns for the signed-in client. */
+let bootstrapPayload: Record<string, unknown> = {};
 
 function fakeSupabaseClient() {
   return {
@@ -58,6 +60,7 @@ function fakeSupabaseClient() {
           error: null,
         });
       }
+      if (fn === "ofoq_client_chat_bootstrap") return Promise.resolve({ data: bootstrapPayload, error: null });
       if (fn === "ofoq_client_escalate") return Promise.resolve(escalateResponse);
       return Promise.resolve({ data: { updated: 1 }, error: null });
     },
@@ -95,7 +98,7 @@ vi.mock("@/lib/supabase/route-auth", () => ({
     ),
 }));
 
-const { POST } = await import("../src/app/api/chat/route");
+const { GET, POST } = await import("../src/app/api/chat/route");
 
 function postRequest(message: string): Request {
   latestMessage = message;
@@ -116,6 +119,13 @@ beforeEach(() => {
     { role: "assistant", content: "ما الهدف من الحملة؟" },
   ];
   latestMessage = "أريد أتكلم مع بشري";
+  bootstrapPayload = {
+    conversationId: "conv-1",
+    customerName: "نور",
+    email: "client@example.test",
+    language: "ar",
+    messages: [{ id: "msg-0", sender: "ASSISTANT", body: "أهلًا بك في أفق", language: "ar", createdAt: "2026-01-01T09:00:00.000Z" }],
+  };
   escalateResponse = {
     data: {
       alertId: "alert-1",
@@ -269,5 +279,27 @@ describe("POST /api/chat escalation", () => {
     expect(calls.map((call) => call.fn)).toContain("ofoq_client_chat_reply");
     expect(calls.filter((call) => call.fn === "ofoq_client_escalate")).toHaveLength(0);
     expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/chat", () => {
+  it("hands the registered client email to the guided service request", async () => {
+    const response = await GET(new Request("http://localhost/api/chat"));
+    const body = await response.json();
+
+    expect(calls.map((call) => call.fn)).toContain("ofoq_client_chat_bootstrap");
+    // The guided pricing message addresses the client by the registered address,
+    // so the bootstrap payload must carry it (db/migrations/supabase/0001...).
+    expect(body.data).toMatchObject({ conversationId: "conv-1", customerName: "نور", email: "client@example.test" });
+    expect(body.data.messages).toHaveLength(1);
+    expect(response.headers.get("Cache-Control")).toContain("no-store");
+  });
+
+  it("still answers when the client has no registered email", async () => {
+    bootstrapPayload = { ...bootstrapPayload, email: null };
+
+    const body = await (await GET(new Request("http://localhost/api/chat"))).json();
+
+    expect(body.data.email).toBeNull();
   });
 });

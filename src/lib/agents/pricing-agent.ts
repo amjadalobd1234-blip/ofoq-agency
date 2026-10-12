@@ -3,14 +3,28 @@
  *
  * This module is deliberately pure: it has no database or model dependency.
  * Fixed service ranges and the requested scope multipliers produce a quote.
- * Ad performance is a conservative planning range based on the client's
- * monthly budget and selected market — never a promise or guaranteed result.
+ * Ad performance is a planning range based on the client's monthly budget and
+ * selected market — never a promise or guaranteed result.
+ *
+ * The expected-results formulas (the ones the client sees) are:
+ *
+ *   effective_cpm    = 3 × cpm_multiplier
+ *   effective_budget = budget × 0.8
+ *   impressions      = (effective_budget / effective_cpm) × 1000 × reach_mult
+ *   visits           = impressions × 0.01
+ *   leads            = visits × 0.025
+ *
+ * and the published range is 70%–130% of the calculated value. Anchors used by
+ * the tests and the support docs:
+ *
+ *   $200   →  37,000–69,000 impressions
+ *   $500   →  92,000–172,000 impressions
+ *   $1,000 → 185,000–345,000 impressions
  */
 import type { Locale } from "@/lib/domain/types";
 
 export type ProjectSize = "small" | "medium" | "large";
 export type PlatformScope = "single" | "multiple";
-export type DeadlineSpeed = "urgent" | "normal" | "flexible";
 export type BudgetBand = "under_200" | "200_500" | "500_1500" | "over_1500";
 export type BudgetQuality = "weak" | "medium" | "good" | "excellent";
 
@@ -32,10 +46,14 @@ export type PricedServiceType = keyof typeof SERVICES;
 /** `other` stays available in the conversation, but has no published price. */
 export type PricingServiceType = PricedServiceType | "other";
 
+/**
+ * Scope multipliers. Delivery time is not asked any more: every guided request
+ * is planned as a normal (non-urgent) delivery. The number of platforms is not
+ * asked either — `platformScopeForBudget()` derives it from the budget.
+ */
 export const PRICE_MULTIPLIERS = {
   size: { small: 0.8, medium: 1.0, large: 1.5 },
   platforms: { single: 1.0, multiple: 1.3 },
-  deadline: { urgent: 1.4, normal: 1.0, flexible: 0.9 },
 } as const;
 
 export const TARGETING_FACTORS = {
@@ -52,14 +70,12 @@ export type TargetingArea = keyof typeof TARGETING_FACTORS;
 export interface PricingInput {
   type: PricingServiceType;
   size: ProjectSize;
-  platforms: PlatformScope;
-  deadline: DeadlineSpeed;
   budget: BudgetBand;
   targeting: TargetingArea;
 }
 
 export interface BudgetBandInfo {
-  /** Conservative planning value for the maximum of this monthly band. */
+  /** Planning value of this monthly band (its published upper bound). */
   max: number;
   quality: BudgetQuality;
   emoji: string;
@@ -106,10 +122,13 @@ export const BUDGET_BANDS: Record<BudgetBand, BudgetBandInfo> = {
 };
 
 /**
- * Planning assumptions. The additional conservative calibration is intentional:
- * applying the raw CPM calculation directly would overstate expected reach for
- * a small Iraqi-market budget. With the 70–130% uncertainty band, a $200 budget
- * targeting Iraq produces the conservative public example of 8,000–15,000 views.
+ * Planning assumptions for paid ads.
+ *
+ *  - `effectiveSpendShare`: 80% of the stated budget reaches the ad platforms
+ *    (the rest covers agency handling and platform rounding).
+ *  - `deliveryEfficiency`: impressions are quoted at 99.5% delivery pacing, so
+ *    the published range is the raw budget/CPM maths and not a cent more.
+ *  - `spreadLow`/`spreadHigh`: the published uncertainty band (70%–130%).
  */
 export const ADS_PLANNING_ASSUMPTIONS = {
   cpm: 3,
@@ -118,9 +137,18 @@ export const ADS_PLANNING_ASSUMPTIONS = {
   spreadLow: 0.7,
   spreadHigh: 1.3,
   effectiveSpendShare: 0.8,
-  conservativeCalibration: 0.22,
+  deliveryEfficiency: 0.995,
   dailySpendForDuration: 10,
 } as const;
+
+/** A `[min, max]` pair of whole counters, smallest first. */
+export type CountRange = [number, number];
+
+export interface AdPerformance {
+  impressions: CountRange;
+  visits: CountRange;
+  leads: CountRange;
+}
 
 export interface PricingResult {
   service: PricingServiceType;
@@ -129,45 +157,82 @@ export interface PricingResult {
   budgetQuality: BudgetQuality;
   budgetLabel: string;
   budgetEmoji: string;
+  /** Derived from the budget: one platform up to $200, several above it. */
+  platforms: PlatformScope;
   /** `null` only for `other`, which has no official public price. */
   minPrice: number | null;
   maxPrice: number | null;
   midPrice: number | null;
   /** Non-ad services and an unpublished `other` request have no performance stats. */
   resultsKind: "numbers" | "none";
-  expectedReach: [number, number] | null;
-  expectedVisits: [number, number] | null;
-  expectedLeads: [number, number] | null;
+  expectedReach: CountRange | null;
+  expectedVisits: CountRange | null;
+  expectedLeads: CountRange | null;
   targeting: TargetingArea;
   /** Estimated active ad days, using 80% of the stated budget and a $10/day plan. */
   estimatedAdDays: number | null;
+}
+
+/**
+ * The platform scope is inferred from the budget, never asked:
+ * $200 or less runs on one platform, anything above it is planned across
+ * several platforms (which is also what the price multiplier reflects).
+ */
+export function platformScopeForBudget(budgetAmount: number): PlatformScope {
+  return budgetAmount <= 200 ? "single" : "multiple";
+}
+
+/** Active ad days for a budget, at 80% spend share and a $10/day plan (max a month). */
+export function adDaysForBudget(budgetAmount: number): number {
+  const days = Math.floor(
+    (budgetAmount * ADS_PLANNING_ASSUMPTIONS.effectiveSpendShare) / ADS_PLANNING_ASSUMPTIONS.dailySpendForDuration,
+  );
+  return Math.max(1, Math.min(30, days));
 }
 
 function roundDollar(value: number): number {
   return Math.round(value);
 }
 
-function roundRange(value: number, step: number): [number, number] {
-  const round = (amount: number) => Math.max(0, Math.round(amount / step) * step);
+function floorTo(value: number, step: number): number {
+  return Math.max(0, Math.floor(value / step) * step);
+}
+
+function roundTo(value: number, step: number): number {
+  return Math.max(0, Math.round(value / step) * step);
+}
+
+/**
+ * The published range of a calculated value: 70%–130%, always smallest first.
+ * The low end is floored and the high end rounded, so the range is never
+ * narrower than the calculation it comes from.
+ */
+export function spreadRange(value: number, step: number): CountRange {
   return [
-    round(value * ADS_PLANNING_ASSUMPTIONS.spreadLow),
-    round(value * ADS_PLANNING_ASSUMPTIONS.spreadHigh),
+    floorTo(value * ADS_PLANNING_ASSUMPTIONS.spreadLow, step),
+    roundTo(value * ADS_PLANNING_ASSUMPTIONS.spreadHigh, step),
   ];
 }
 
-function adsProjections(budget: number, targeting: TargetingArea): Pick<PricingResult, "expectedReach" | "expectedVisits" | "expectedLeads"> {
+/**
+ * Expected ad performance for an exact monthly budget and target area.
+ *
+ * Exported so the numbers can be quoted (and verified) for any budget, e.g.
+ * `estimateAdsPerformance(1_000, "iraq_all")` → 185,000–345,000 impressions.
+ */
+export function estimateAdsPerformance(budgetAmount: number, targeting: TargetingArea): AdPerformance {
   const target = TARGETING_FACTORS[targeting];
   const effectiveCpm = ADS_PLANNING_ASSUMPTIONS.cpm * target.cpm;
-  const effectiveAdSpend = budget * ADS_PLANNING_ASSUMPTIONS.effectiveSpendShare;
-  const conservativeSpend = effectiveAdSpend * ADS_PLANNING_ASSUMPTIONS.conservativeCalibration;
-  const impressions = (conservativeSpend / effectiveCpm) * 1_000 * target.reach;
+  const effectiveBudget = budgetAmount * ADS_PLANNING_ASSUMPTIONS.effectiveSpendShare;
+  const impressions =
+    (effectiveBudget / effectiveCpm) * 1_000 * target.reach * ADS_PLANNING_ASSUMPTIONS.deliveryEfficiency;
   const visits = impressions * ADS_PLANNING_ASSUMPTIONS.clickRate;
   const leads = visits * ADS_PLANNING_ASSUMPTIONS.conversionRate;
 
   return {
-    expectedReach: roundRange(impressions, 1_000),
-    expectedVisits: roundRange(visits, 10),
-    expectedLeads: roundRange(leads, 1),
+    impressions: spreadRange(impressions, 1_000),
+    visits: spreadRange(visits, 10),
+    leads: spreadRange(leads, 1),
   };
 }
 
@@ -175,20 +240,16 @@ function adsProjections(budget: number, targeting: TargetingArea): Pick<PricingR
 export function calculateServiceEstimate(input: PricingInput): PricingResult {
   const budget = BUDGET_BANDS[input.budget];
   const price = input.type === "other" ? null : SERVICES[input.type];
-  const multiplier =
-    PRICE_MULTIPLIERS.size[input.size] *
-    PRICE_MULTIPLIERS.platforms[input.platforms] *
-    PRICE_MULTIPLIERS.deadline[input.deadline];
+  const platforms = platformScopeForBudget(budget.max);
+  const multiplier = PRICE_MULTIPLIERS.size[input.size] * PRICE_MULTIPLIERS.platforms[platforms];
   const minPrice = price ? roundDollar(price.min * multiplier) : null;
   const maxPrice = price ? roundDollar(price.max * multiplier) : null;
   const midPrice = minPrice !== null && maxPrice !== null ? roundDollar((minPrice + maxPrice) / 2) : null;
+  // Only paid ads have expected performance numbers.
   const hasAdResults = input.type === "ads";
-  const projections = hasAdResults
-    ? adsProjections(budget.max, input.targeting)
-    : { expectedReach: null, expectedVisits: null, expectedLeads: null };
-  const estimatedAdDays = hasAdResults
-    ? Math.max(1, Math.min(30, Math.floor((budget.max * ADS_PLANNING_ASSUMPTIONS.effectiveSpendShare) / ADS_PLANNING_ASSUMPTIONS.dailySpendForDuration)))
-    : null;
+  const performance = hasAdResults
+    ? estimateAdsPerformance(budget.max, input.targeting)
+    : { impressions: null, visits: null, leads: null };
 
   return {
     service: input.type,
@@ -197,13 +258,16 @@ export function calculateServiceEstimate(input: PricingInput): PricingResult {
     budgetQuality: budget.quality,
     budgetLabel: budget.labelAr,
     budgetEmoji: budget.emoji,
+    platforms,
     minPrice,
     maxPrice,
     midPrice,
     resultsKind: hasAdResults ? "numbers" : "none",
-    ...projections,
+    expectedReach: performance.impressions,
+    expectedVisits: performance.visits,
+    expectedLeads: performance.leads,
     targeting: input.targeting,
-    estimatedAdDays,
+    estimatedAdDays: hasAdResults ? adDaysForBudget(budget.max) : null,
   };
 }
 

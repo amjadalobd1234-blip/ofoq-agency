@@ -568,6 +568,81 @@ export function humanEscalationTemplate(
   };
 }
 
+/** 6. A new service request completed in the chat: told to the owner. */
+export interface ServiceRequestEmailDetails {
+  /** Order reference, e.g. OFOQ-2026-001. */
+  orderCode: string;
+  service: string;
+  size: string;
+  budget: string;
+  targetArea: string;
+  /** Published price range, or a note that the scope needs review. */
+  priceRange: string;
+  contactChannel: string;
+  contactValue?: string | null;
+  locale?: Locale;
+}
+
+export function serviceRequestOwnerTemplate(
+  details: ServiceRequestEmailDetails,
+  options: { locale?: Locale } = {},
+): EmailTemplate {
+  const locale = pickLocale(options.locale ?? details.locale, details.orderCode);
+  const order = details.orderCode.trim() || "OFOQ-2026-001";
+  const contact = details.contactValue ? `${details.contactChannel} — ${details.contactValue}` : details.contactChannel;
+  const facts: Array<[string, string]> = locale === "en"
+    ? [
+        ["Order", `#${order}`],
+        ["Service", details.service],
+        ["Size", details.size],
+        ["Budget", details.budget],
+        ["Target area", details.targetArea],
+        ["Price range", details.priceRange],
+        ["Contact channel", contact],
+      ]
+    : [
+        ["رقم الطلب", `#${order}`],
+        ["الخدمة", details.service],
+        ["الحجم", details.size],
+        ["الميزانية", details.budget],
+        ["المنطقة المستهدفة", details.targetArea],
+        ["نطاق السعر", details.priceRange],
+        ["قناة التواصل", contact],
+      ];
+  const link = `${appUrl()}/admin/alerts`;
+  const title = locale === "en" ? `New service request #${order}` : `طلب خدمة جديد #${order}`;
+  const intro =
+    locale === "en"
+      ? "The Ofoq assistant just finished a guided service request. Every detail is below."
+      : "مساعد أفق أنهى للتو طلب خدمة موجّهاً. كل التفاصيل في الأسفل.";
+  const body = locale === "en" ? "Request details:" : "تفاصيل الطلب:";
+
+  return {
+    subject: `🔔 ${title}`,
+    text: [
+      title,
+      "",
+      intro,
+      "",
+      body,
+      ...facts.map(([label, value]) => `- ${label}: ${value}`),
+      "",
+      locale === "en" ? `Details: ${link}` : `التفاصيل: ${link}`,
+      "",
+      footer(locale),
+    ].join("\n"),
+    html: renderLayout({
+      title,
+      intro,
+      body,
+      facts,
+      action: { label: locale === "en" ? "Open the control room" : "افتح لوحة المراقبة", url: link },
+      footer: footer(locale),
+      locale,
+    }),
+  };
+}
+
 /** Absolute app URL used inside email buttons. */
 export function appUrl(): string {
   const configured = (process.env.APP_URL ?? "").trim();
@@ -584,6 +659,7 @@ export const EMAIL_TEMPLATE_NAMES = [
   "invoice",
   "alert_owner",
   "human_escalation",
+  "service_request_owner",
 ] as const;
 
 export type EmailTemplateName = (typeof EMAIL_TEMPLATE_NAMES)[number];
@@ -649,6 +725,20 @@ export function renderEmailTemplate(name: EmailTemplateName, data: Record<string
           clientEmail: typeof data.clientEmail === "string" ? data.clientEmail : undefined,
           conversationId: typeof data.conversationId === "string" ? data.conversationId : undefined,
         },
+      );
+    case "service_request_owner":
+      return serviceRequestOwnerTemplate(
+        {
+          orderCode: requireString(data, "orderCode"),
+          service: requireString(data, "service"),
+          size: requireString(data, "size"),
+          budget: requireString(data, "budget"),
+          targetArea: requireString(data, "targetArea"),
+          priceRange: requireString(data, "priceRange"),
+          contactChannel: requireString(data, "contactChannel"),
+          contactValue: typeof data.contactValue === "string" ? data.contactValue : undefined,
+        },
+        { locale },
       );
     default:
       throw new Error(`Unknown email template "${String(name)}".`);

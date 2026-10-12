@@ -23,6 +23,8 @@ const messageSchema = z.object({
 interface BootstrapPayload {
   conversationId: string;
   customerName: string;
+  /** Registered address of the client, shown by the guided service request. */
+  email?: string | null;
   language: "ar" | "en";
   messages: Array<{ id: string; sender: string; body: string; language: string; createdAt: string; provider?: string | null }>;
 }
