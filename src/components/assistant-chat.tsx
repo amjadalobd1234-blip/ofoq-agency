@@ -15,6 +15,27 @@ interface ChatMessage {
   provider?: string | null;
 }
 
+/**
+ * A service request opened from the dashboard button (/chat?intent=service_request).
+ * Kept in sessionStorage so a refresh in this tab continues the same request
+ * instead of asking the first question again.
+ */
+interface ServiceRequestContext {
+  intent: "service_request";
+  conversationId: string;
+  /** Last saved message when the request started: the welcome is shown right after it. */
+  afterMessageId: string | null;
+  startedAt: string;
+}
+
+const SERVICE_REQUEST_STORAGE_KEY = "ofoq:chat:service-request";
+const SERVICE_REQUEST_WELCOME_ID = "service-request-welcome";
+/** First assistant message of a service request. Displayed in the chat only; it is not saved to the conversation. */
+const SERVICE_REQUEST_WELCOME: Record<Locale, string> = {
+  ar: "تمام! خلينا نجهّز طلب خدمة. أول شي: شنو نوع الخدمة اللي تحتاجها؟\n(تصميم / إعلانات / سوشيال ميديا / محتوى / SEO / غير ذلك)",
+  en: "Great! Let's get a service request ready. First: what type of service do you need?\n(Design / Ads / Social media / Content / SEO / Other)",
+};
+
 export function AssistantChat({ locale, intent }: { locale: Locale; intent?: string }) {
   const ar = locale === "ar";
   const copy = dictionaries[locale].assistant;
@@ -28,6 +49,8 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
   const [providerAvailable, setProviderAvailable] = useState(false);
   /** True once the platform really handed this conversation to a human. */
   const [escalated, setEscalated] = useState(false);
+  /** Set only when the chat was opened with ?intent=service_request. */
+  const [serviceRequest, setServiceRequest] = useState<ServiceRequestContext | null>(null);
   const tailRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -36,8 +59,11 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
       .then(async (response) => {
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || "Unable to open chat.");
-        setConversationId(payload.data?.conversationId || "");
-        setMessages(Array.isArray(payload.data?.messages) ? payload.data.messages : []);
+        const loadedConversationId: string = payload.data?.conversationId || "";
+        const loadedMessages: ChatMessage[] = Array.isArray(payload.data?.messages) ? payload.data.messages : [];
+        setConversationId(loadedConversationId);
+        setMessages(loadedMessages);
+        setServiceRequest(intent === "service_request" ? openServiceRequest(loadedConversationId, loadedMessages) : null);
         setProviderAvailable(Boolean(payload.provider?.configured));
         setReady(true);
       })
@@ -46,7 +72,7 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
       })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, []);
+  }, [intent]);
 
   useEffect(() => { tailRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [messages, sending]);
 
@@ -95,6 +121,9 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
     }
   }
 
+  // The service-request welcome is displayed, not saved: it sits after the message that was last when the request started.
+  const visibleMessages = serviceRequest ? withServiceWelcome(messages, serviceRequest, locale) : messages;
+
   const quickReplies = ar
     ? ["أريد إدارة حسابات التواصل", "أحتاج إلى موقع إلكتروني", "أريد معرفة الأسعار"]
     : ["I need social media management", "I need a website", "I would like to understand pricing"];
@@ -114,7 +143,7 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
         {error && <div className="form-notice form-notice-error chat-error" role="alert">{error}</div>}
 
         <div className="chat-messages" role="log" aria-live="polite" aria-relevant="additions text">
-          {loading ? <div className="chat-loading"><span className="loading-orbit" />{ar ? "جارٍ فتح المحادثة…" : "Opening your conversation…"}</div> : messages.length === 0 ? <div className="chat-loading">{ar ? "لا توجد رسائل بعد. ابدأ بكتابة ما تحتاجه." : "No messages yet. Tell us what you need."}</div> : messages.map((message) => {
+          {loading ? <div className="chat-loading"><span className="loading-orbit" />{ar ? "جارٍ فتح المحادثة…" : "Opening your conversation…"}</div> : visibleMessages.length === 0 ? <div className="chat-loading">{ar ? "لا توجد رسائل بعد. ابدأ بكتابة ما تحتاجه." : "No messages yet. Tell us what you need."}</div> : visibleMessages.map((message) => {
             const own = message.sender === "CLIENT";
             return <article className={`chat-message ${own ? "chat-message-client" : "chat-message-assistant"}`} key={message.id}>
               {!own && <span className="message-sender">{message.sender === "STAFF" ? (ar ? "فريق أفق" : "Ofoq team") : copy.title}</span>}
@@ -150,6 +179,45 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
       </aside>
     </div>
   );
+}
+
+/**
+ * Continues this tab's service request when it belongs to the same conversation
+ * (e.g. after a refresh); otherwise starts a new one right after the last saved
+ * message and keeps it in sessionStorage.
+ */
+function openServiceRequest(conversationId: string, messages: ChatMessage[]): ServiceRequestContext {
+  const stored = readServiceRequest();
+  if (stored && stored.conversationId === conversationId) return stored;
+  const context: ServiceRequestContext = {
+    intent: "service_request",
+    conversationId,
+    afterMessageId: messages.length > 0 ? messages[messages.length - 1].id : null,
+    startedAt: new Date().toISOString(),
+  };
+  try {
+    window.sessionStorage.setItem(SERVICE_REQUEST_STORAGE_KEY, JSON.stringify(context));
+  } catch {
+    // Storage can be blocked (private mode, browser policy); the request still works for this page view.
+  }
+  return context;
+}
+
+function readServiceRequest(): ServiceRequestContext | null {
+  try {
+    const stored = JSON.parse(window.sessionStorage.getItem(SERVICE_REQUEST_STORAGE_KEY) ?? "null");
+    return stored?.intent === "service_request" && typeof stored.conversationId === "string" ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Places the welcome after its anchor message, or first when the anchor is no longer in the loaded history. */
+function withServiceWelcome(messages: ChatMessage[], context: ServiceRequestContext, locale: Locale): ChatMessage[] {
+  const welcome: ChatMessage = { id: SERVICE_REQUEST_WELCOME_ID, sender: "ASSISTANT", body: SERVICE_REQUEST_WELCOME[locale], language: locale, createdAt: context.startedAt };
+  const anchor = messages.findIndex((message) => message.id === context.afterMessageId);
+  const position = anchor === -1 ? 0 : anchor + 1;
+  return [...messages.slice(0, position), welcome, ...messages.slice(position)];
 }
 
 function formatTime(value: string, locale: Locale): string {
