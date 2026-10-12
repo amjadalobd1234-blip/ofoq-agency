@@ -15,8 +15,11 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AssistantChat } from "../src/components/assistant-chat";
+import { FOUNDING_BADGE } from "../src/lib/agents/pricing-agent";
 
 const STORAGE_KEY = "ofoq:chat:service-request";
+const FOUNDING_BADGE_AR = FOUNDING_BADGE.ar;
+const FOUNDING_BADGE_EN = FOUNDING_BADGE.en;
 
 interface SavedMessage { id: string; sender: string; body: string; language: string; createdAt: string }
 
@@ -91,6 +94,8 @@ describe("price estimation after the guided request", () => {
       "🎯 الأنسب لمشروعك: 420$",
       "📊 تقييم الميزانية: 🟡 ضعيفة",
       "",
+      FOUNDING_BADGE_AR,
+      "",
       "📈 النتائج المتوقعة شهرياً (تقدير):",
       "• الظهور: 46,700 – 86,700",
       "• الزيارات: 930 – 1,730",
@@ -133,6 +138,8 @@ describe("price estimation after the guided request", () => {
       "🎯 الأنسب لمشروعك: 625$",
       "📊 تقييم الميزانية: 🟢 متوسطة",
       "",
+      FOUNDING_BADGE_AR,
+      "",
       "✨ ما تحصل عليه:",
       "تصاميم بهوية واحدة: شكل ثابت لحسابك يوضّح عرضك من أول نظرة ويزيد ثقة الزائر.",
       "",
@@ -160,13 +167,42 @@ describe("price estimation after the guided request", () => {
     expect(body).toContain("💰 Estimated price: 175$ – 490$");
     expect(body).toContain("🎯 Best fit for your project: 333$");
     expect(body).toContain("📊 Budget read: 🟡 Tight");
+    expect(body).toContain(FOUNDING_BADGE_EN);
     expect(body).toContain("✨ What you get:");
     expect(body).toContain("• We start with one platform (Instagram, for example) and expand later");
     expect(body).not.toContain("Impressions:");
     expect(body).not.toContain("أتعاب");
   });
 
-  it("keeps a request saved before the budget bands changed, and prices it on the band that covers the same range", async () => {
+  it("shows the founding badge on the estimate while the client is among the first 10", async () => {
+    await openChat();
+    await answer(["تصميم", "متوسط", "Instagram", "عادي (7 أيام)", "500-1500$"]);
+
+    await waitFor(() => expect(estimateBubbles()).toHaveLength(1));
+    const body = estimateBubbles()[0].querySelector("p")?.textContent ?? "";
+    expect(body).toContain(FOUNDING_BADGE_AR);
+    // The badge sits under the budget read, above the qualitative outcome.
+    expect(body.indexOf(FOUNDING_BADGE_AR)).toBeGreaterThan(body.indexOf("📊 تقييم الميزانية"));
+    expect(body.indexOf(FOUNDING_BADGE_AR)).toBeLessThan(body.indexOf("✨ ما تحصل عليه:"));
+    // founding: 300 … 700 (medium × single × normal = 1)
+    expect(body).toContain("💰 السعر التقديري: 300$ – 700$");
+  });
+
+  it("drops the badge and moves to normal prices once the agency is past its first 10 clients", async () => {
+    render(<AssistantChat locale="ar" intent="service_request" customerCount={12} />);
+    await waitFor(() => expect(document.querySelectorAll(".chat-messages .chat-message").length).toBeGreaterThan(0));
+    await answer(["تصميم", "متوسط", "Instagram", "عادي (7 أيام)", "500-1500$"]);
+
+    await waitFor(() => expect(estimateBubbles()).toHaveLength(1));
+    const body = estimateBubbles()[0].querySelector("p")?.textContent ?? "";
+    expect(body).not.toContain(FOUNDING_BADGE_AR);
+    expect(body).not.toContain("مبروك");
+    // normal: 500 … 1200 (the same answers, no launch prices).
+    expect(body).toContain("💰 السعر التقديري: 500$ – 1,200$");
+    expect(body).toContain("🎯 الأنسب لمشروعك: 850$");
+  });
+
+  it("does not translate a budget band that is no longer offered: the request restarts from TYPE", async () => {
     const answerLog = ["TYPE", "SIZE", "PLATFORMS", "DEADLINE", "BUDGET"].map((step) => ({
       step,
       afterMessageId: "m-greeting",
@@ -184,11 +220,15 @@ describe("price estimation after the guided request", () => {
 
     await openChat();
 
-    await waitFor(() => expect(estimateBubbles()).toHaveLength(1));
-    // «300-700$» is now «200-500$»: the same range, the band the agent knows.
-    expect(shownBodies()).toContain("200-500$");
-    expect(estimateBubbles()[0].querySelector("p")?.textContent).toContain("📊 تقييم الميزانية: 🟢 متوسطة");
-    expect(estimateBubbles()[0].querySelector("p")?.textContent).toContain("💰 السعر التقديري: 375$ – 875$");
+    // «300-700$» is not one of the four bands (200 / 500 / 1500): nothing is priced
+    // from it and nothing is guessed — the client is asked again from the start.
+    expect(estimateBubbles()).toHaveLength(0);
+    expect(shownBodies()).not.toContain("300-700$");
+    expect(document.querySelectorAll(".chat-service-options button")).toHaveLength(6);
     expect(postCalls()).toHaveLength(0);
+
+    // Answering again rebases the stored request on the offered options.
+    choose("تصميم");
+    await waitFor(() => expect(JSON.parse(window.sessionStorage.getItem(STORAGE_KEY) ?? "null")).toMatchObject({ step: "SIZE", answers: { type: "design" }, answerLog: [{ step: "TYPE" }] }));
   });
 });

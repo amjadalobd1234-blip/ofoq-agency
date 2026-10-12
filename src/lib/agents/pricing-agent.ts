@@ -21,6 +21,9 @@
  *      field that could carry them — the fees can never leak by accident.
  *   3. Services that are not ads never receive invented performance numbers;
  *      they get a qualitative description instead.
+ *   4. The one internal fact that IS public is the launch badge: a founding
+ *      client is told «أنت من أول 10 زبائن لأفق» (`ClientPricingView.foundingClient`).
+ *      The tier flag travels deliberately; the fee and the split never do.
  */
 import type { Locale } from "@/lib/domain/types";
 
@@ -153,55 +156,34 @@ export const AGENCY_FEE_PERCENT: Record<PricingTier, number> = { founding: 0.2, 
 
 export interface BudgetBandInfo {
   /**
-   * Used to classify the band. `over_1500` is open-ended, so 99,999 is a
-   * sentinel ("more than 1,500"), not money.
+   * What the band stands for, in dollars, for planning purposes.
+   * `over_1500` is open-ended («أكثر من 1500$»، أي 3000-5000$ تقريباً)، فالتخطيط
+   * يستخدم 3000$ — سقف منطقي، بلا أرقام حساسة وبلا تقديرات خيالية.
    */
-  ceiling: number;
-  /**
-   * The spend the ad projections are built on. For the open-ended band the
-   * floor is used, because projecting 99,999 would invent a budget the client
-   * never stated; the real number is agreed later with the client.
-   */
-  projectionSpend: number;
+  spend: number;
+  /** The band's own quality, classified from its `spend` by `classifyBudget`. */
   quality: BudgetQuality;
   emoji: string;
   labelAr: string;
   labelEn: string;
 }
 
+/**
+ * تقييم الميزانية من قيمتها: 200 → ضعيفة، 500 → متوسطة، 1500 → جيدة، أكثر →
+ * ممتازة. Rule of the launch policy, applied to every band below.
+ */
+export function classifyBudget(spend: number): BudgetQuality {
+  if (spend <= 200) return "weak";
+  if (spend <= 500) return "medium";
+  if (spend <= 1500) return "good";
+  return "excellent";
+}
+
 export const BUDGET_BANDS: Record<BudgetBand, BudgetBandInfo> = {
-  under_200: {
-    ceiling: 200,
-    projectionSpend: 200,
-    quality: "weak",
-    emoji: "🟡",
-    labelAr: "ضعيفة",
-    labelEn: "Tight",
-  },
-  "200_500": {
-    ceiling: 500,
-    projectionSpend: 500,
-    quality: "medium",
-    emoji: "🟢",
-    labelAr: "متوسطة",
-    labelEn: "Moderate",
-  },
-  "500_1500": {
-    ceiling: 1500,
-    projectionSpend: 1500,
-    quality: "good",
-    emoji: "🟢🟢",
-    labelAr: "جيدة",
-    labelEn: "Good",
-  },
-  over_1500: {
-    ceiling: 99_999,
-    projectionSpend: 1500,
-    quality: "excellent",
-    emoji: "🟢🟢🟢",
-    labelAr: "ممتازة",
-    labelEn: "Excellent",
-  },
+  under_200: { spend: 200, quality: classifyBudget(200), emoji: "🟡", labelAr: "ضعيفة", labelEn: "Tight" },
+  "200_500": { spend: 500, quality: classifyBudget(500), emoji: "🟢", labelAr: "متوسطة", labelEn: "Moderate" },
+  "500_1500": { spend: 1500, quality: classifyBudget(1500), emoji: "🟢🟢", labelAr: "جيدة", labelEn: "Good" },
+  over_1500: { spend: 3000, quality: classifyBudget(3000), emoji: "🟢🟢🟢", labelAr: "ممتازة", labelEn: "Excellent" },
 };
 
 /**
@@ -321,7 +303,7 @@ export function calculateServiceEstimate(input: PricingInput): PricingResult {
   const band = BUDGET_BANDS[input.budget];
   const isAds = input.type === "ads";
   const projections = isAds
-    ? adsProjections(band.projectionSpend)
+    ? adsProjections(band.spend)
     : { expectedReach: [0, 0] as [number, number], expectedVisits: [0, 0] as [number, number], expectedLeads: [0, 0] as [number, number] };
   const qualitative = input.type === "ads" ? null : QUALITATIVE_RESULTS[input.type];
   const weak = band.quality === "weak";
@@ -363,6 +345,11 @@ export function calculateServiceEstimate(input: PricingInput): PricingResult {
  */
 export interface ClientPricingView {
   service: PricingServiceType;
+  /**
+   * True while the agency is still inside «أول 10 زبائن». Public on purpose:
+   * it turns into the congratulation line below. It carries no amount.
+   */
+  foundingClient: boolean;
   budgetQuality: BudgetQuality;
   budgetLabel: string;
   budgetEmoji: string;
@@ -376,10 +363,17 @@ export interface ClientPricingView {
   suggestions: string[];
 }
 
+/** شارة الزبون التأسيسي: تُعرض للعميل بقرار من صاحب الوكالة. */
+export const FOUNDING_BADGE = {
+  ar: "🎉 مبروك! أنت من أول 10 زبائن لأفق — أسعار خاصة + مراجعات إضافية مجاناً",
+  en: "🎉 Congratulations! You are one of the first 10 Ofoq clients — special prices + extra revisions for free",
+} as const;
+
 export function toClientPricingView(result: PricingResult, locale: Locale): ClientPricingView {
   const isAr = locale === "ar";
   return {
     service: result.service,
+    foundingClient: result._internal.pricingTier === "founding",
     budgetQuality: result.budgetQuality,
     budgetLabel: isAr ? result.budgetLabel : result.budgetLabelEn,
     budgetEmoji: result.budgetEmoji,
@@ -443,6 +437,11 @@ export function describeClientEstimate(result: PricingResult, locale: Locale): s
     ? `📊 تقييم الميزانية: ${view.budgetEmoji} ${view.budgetLabel}`
     : `📊 Budget read: ${view.budgetEmoji} ${view.budgetLabel}`);
   lines.push("");
+
+  if (view.foundingClient) {
+    lines.push(ar ? FOUNDING_BADGE.ar : FOUNDING_BADGE.en);
+    lines.push("");
+  }
 
   if (view.results.kind === "numbers") {
     lines.push(ar ? "📈 النتائج المتوقعة شهرياً (تقدير):" : "📈 Expected results per month (estimate):");

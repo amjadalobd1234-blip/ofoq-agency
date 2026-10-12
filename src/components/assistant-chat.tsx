@@ -125,13 +125,6 @@ export const SERVICE_REQUEST_QUESTIONS: Record<ServiceRequestQuestionStep, Servi
   },
 };
 
-/** الباقات القديمة (أقل من 300$ / 300-700$ / 700-1500$) تُترجم عند قراءة طلب محفوظ قبل التحديث. */
-const LEGACY_BUDGET_OPTION_IDS: Record<string, string> = {
-  under_300: "under_200",
-  "300_700": "200_500",
-  "700_1500": "500_1500",
-};
-
 /** The service option ids of the TYPE question as the pricing agent's service types. */
 const SERVICE_TYPE_BY_OPTION: Record<string, PricingServiceType> = {
   design: "design",
@@ -248,7 +241,20 @@ function normalizeAnswer(value: string): string {
     .trim();
 }
 
-export function AssistantChat({ locale, intent }: { locale: Locale; intent?: string }) {
+/**
+ * `customerCount` decides the pricing tier the estimate is built on («أول 10
+ * زبائن»). It defaults to the launch constant; the page will pass the live count
+ * once it comes from the database.
+ */
+export function AssistantChat({
+  locale,
+  intent,
+  customerCount = CLIENTS_COUNTED_SO_FAR,
+}: {
+  locale: Locale;
+  intent?: string;
+  customerCount?: number;
+}) {
   const ar = locale === "ar";
   const copy = dictionaries[locale].assistant;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -363,7 +369,7 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
 
   // The service-request exchange is displayed, not saved: the welcome sits after the message that was last when the
   // request started, and each answer (with the question that follows it) after the message that was last when it was chosen.
-  const visibleMessages = serviceRequest ? withServiceRequest(messages, serviceRequest, locale) : messages;
+  const visibleMessages = serviceRequest ? withServiceRequest(messages, serviceRequest, locale, customerCount) : messages;
   const pendingQuestion = serviceRequest && isQuestionStep(serviceRequest.step) ? SERVICE_REQUEST_QUESTIONS[serviceRequest.step] : null;
 
   const quickReplies = ar
@@ -464,12 +470,10 @@ function readServiceRequest(): ServiceRequestContext | null {
     const stored = JSON.parse(window.sessionStorage.getItem(SERVICE_REQUEST_STORAGE_KEY) ?? "null");
     if (stored?.intent !== "service_request" || typeof stored.conversationId !== "string") return null;
     const answerLog: ServiceRequestAnswerEvent[] = Array.isArray(stored.answerLog) ? stored.answerLog : [];
-    const answers: ServiceRequestAnswers = stored.answers && typeof stored.answers === "object" ? { ...stored.answers } : {};
-    // A request saved before the budget bands changed keeps its answer: the old
-    // ids are translated to the band that covers the same range.
-    if (typeof answers.budget === "string" && LEGACY_BUDGET_OPTION_IDS[answers.budget]) {
-      answers.budget = LEGACY_BUDGET_OPTION_IDS[answers.budget];
-    }
+    // No band is translated for a stored request: the bands are exactly the ones
+    // the question offers, so an answer that is no longer an option makes the
+    // progress inconsistent and the request restarts from TYPE.
+    const answers: ServiceRequestAnswers = stored.answers && typeof stored.answers === "object" ? stored.answers : {};
     const step: ServiceRequestStep = SERVICE_REQUEST_STEPS[answerLog.length];
     const consistent = answerLog.length < SERVICE_REQUEST_STEPS.length && stored.step === step && answerLog.every((event, index) => {
       const expected = SERVICE_REQUEST_STEPS[index] as ServiceRequestQuestionStep;
@@ -492,7 +496,12 @@ function readServiceRequest(): ServiceRequestContext | null {
  * price estimation the pricing agent computed. Entries whose anchor is no
  * longer loaded go first.
  */
-function withServiceRequest(messages: ChatMessage[], context: ServiceRequestContext, locale: Locale): ChatMessage[] {
+function withServiceRequest(
+  messages: ChatMessage[],
+  context: ServiceRequestContext,
+  locale: Locale,
+  customerCount: number,
+): ChatMessage[] {
   const entries: Array<{ afterMessageId: string | null; message: ChatMessage }> = [
     { afterMessageId: context.afterMessageId, message: { id: SERVICE_REQUEST_WELCOME_ID, sender: "ASSISTANT", body: SERVICE_REQUEST_WELCOME[locale], language: locale, createdAt: context.startedAt } },
   ];
@@ -512,7 +521,7 @@ function withServiceRequest(messages: ChatMessage[], context: ServiceRequestCont
       message: {
         id: SERVICE_REQUEST_ESTIMATE_ID,
         sender: "ASSISTANT",
-        body: serviceRequestEstimate(context.answers, locale),
+        body: serviceRequestEstimate(context.answers, locale, customerCount),
         language: locale,
         createdAt: last ? last.answeredAt : context.startedAt,
       },

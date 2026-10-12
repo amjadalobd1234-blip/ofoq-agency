@@ -2,9 +2,10 @@
  * وكيل التسعير — سياسة الإطلاق «أول 10 زبائن».
  *
  * The pricing agent is deterministic and pure, so every number below is a
- * literal expectation: the founding table, the multipliers, the budget bands,
- * the ad projections and — most importantly — the guarantee that the agency fee
- * and the ad-spend split never leave `_internal`.
+ * literal expectation: the founding table, the multipliers, the budget bands
+ * (exactly 200 / 500 / 1500, with no translated legacy band), the ad
+ * projections, the founding badge and — most importantly — the guarantee that
+ * the agency fee and the ad-spend split never leave `_internal`.
  */
 import { describe, expect, it } from "vitest";
 
@@ -18,7 +19,9 @@ import {
   NORMAL_TIER_PRICES,
   TIER_MULTIPLIERS,
   WEAK_BUDGET_SUGGESTIONS,
+  FOUNDING_BADGE,
   calculateServiceEstimate,
+  classifyBudget,
   describeClientEstimate,
   formatUsd,
   pricingTierFor,
@@ -134,16 +137,54 @@ describe("budget evaluation", () => {
     }
   });
 
-  it("documents the band ceilings, and never projects an ad budget from the open-ended sentinel", () => {
-    expect(BUDGET_BANDS.under_200.ceiling).toBe(200);
-    expect(BUDGET_BANDS["200_500"].ceiling).toBe(500);
-    expect(BUDGET_BANDS["500_1500"].ceiling).toBe(1500);
-    expect(BUDGET_BANDS.over_1500.ceiling).toBe(99_999);
-    // «أكثر من 1500» is open-ended: the projection uses the floor, not 99,999.
-    expect(BUDGET_BANDS.over_1500.projectionSpend).toBe(1500);
+  it("uses exactly the band values 200 / 500 / 1500, and 3000 for the open-ended band", () => {
+    expect(BUDGET_BANDS.under_200.spend).toBe(200);
+    expect(BUDGET_BANDS["200_500"].spend).toBe(500);
+    expect(BUDGET_BANDS["500_1500"].spend).toBe(1500);
+    // «أكثر من 1500$»: 3000 is the planning value — no 99,999 sentinel anywhere.
+    expect(BUDGET_BANDS.over_1500.spend).toBe(3000);
+    expect(JSON.stringify(BUDGET_BANDS)).not.toContain("99999");
 
+    for (const band of BUDGETS) {
+      expect(BUDGET_BANDS[band].quality).toBe(classifyBudget(BUDGET_BANDS[band].spend));
+    }
+    expect(classifyBudget(200)).toBe("weak");
+    expect(classifyBudget(500)).toBe("medium");
+    expect(classifyBudget(1500)).toBe("good");
+    expect(classifyBudget(3000)).toBe("excellent");
+  });
+
+  it("over_1500 never produces a money figure above $10,000 — and no other band does", () => {
+    // The whole point of the 3000 cap: a client who says «أكثر من 1500$» gets a
+    // plausible plan (ad spend 3000$, a price range in the low thousands), not an
+    // invented multi-million projection built from a 99,999 sentinel.
+    for (const budget of BUDGETS) {
+      for (const type of SERVICE_TYPES) {
+        for (const customerCount of [0, 10]) {
+          const result = calculateServiceEstimate({ type, size: "large", platforms: "multiple", deadline: "urgent", budget, customerCount });
+          for (const money of [result.minPrice, result.midPrice, result.maxPrice, result._internal.agencyFee, result._internal.adSpend]) {
+            expect(money).toBeLessThan(10_000);
+          }
+        }
+      }
+    }
+
+    // The projected ad spend is the band value itself, and every dollar figure
+    // the client is shown for that band stays under $10,000.
     const ads = calculateServiceEstimate(input({ type: "ads", budget: "over_1500" }));
-    expect(ads.expectedReach).toEqual([350_000, 650_000]);
+    expect(BUDGET_BANDS.over_1500.spend).toBe(3000);
+    expect(ads.expectedLeads[1]).toBeLessThan(10_000);
+    for (const locale of ["ar", "en"] as const) {
+      const money = [...describeClientEstimate(ads, locale).matchAll(/([\d,]+)\$/g)].map((match) => Number(match[1]!.replace(/,/g, "")));
+      expect(money.length).toBeGreaterThan(0);
+      for (const amount of money) expect(amount).toBeLessThan(10_000);
+    }
+
+    // Counts are not money: impressions and visits are legitimately larger than
+    // $10,000 would be (a 3000$ spend buys ~1M impressions at CPM 3$).
+    expect(ads.expectedReach).toEqual([700_000, 1_300_000]);
+    expect(ads.expectedVisits).toEqual([14_000, 26_000]);
+    expect(ads.expectedLeads).toEqual([420, 780]);
   });
 });
 
@@ -151,7 +192,7 @@ describe("expected results", () => {
   it("projects ads from the planning assumptions: CPM, then click rate, then conversion", () => {
     expect(ADS_PLANNING_ASSUMPTIONS).toMatchObject({ cpm: 3, clickRate: 0.02, conversionRate: 0.03, spreadLow: 0.7, spreadHigh: 1.3 });
 
-    // 500$ → 166,666 impressions → 3,333 visits → 100 leads, each as a ±30% range.
+    // Band value 500$ → 166,666 impressions → 3,333 visits → 100 leads, each as a ±30% range.
     const ads = calculateServiceEstimate(input({ type: "ads", budget: "200_500" }));
     expect(ads.resultsKind).toBe("numbers");
     expect(ads.expectedReach).toEqual([116_700, 216_700]);
@@ -239,10 +280,12 @@ describe("internal split (never client-facing)", () => {
     const view = toClientPricingView(result, "ar");
 
     expect(Object.keys(view).sort()).toEqual(
-      ["budgetEmoji", "budgetLabel", "budgetQuality", "maxPrice", "midPrice", "minPrice", "results", "service", "suggestions"].sort(),
+      ["budgetEmoji", "budgetLabel", "budgetQuality", "foundingClient", "maxPrice", "midPrice", "minPrice", "results", "service", "suggestions"].sort(),
     );
-    // Not just absent from the keys: impossible to reach by name at all.
-    expect(JSON.stringify(view)).not.toMatch(/agencyFee|adSpend|_internal|founding|normal/);
+    // The fee and the split are impossible to reach by name — the founding flag
+    // is the only internal fact that travels, and it is a boolean, not an amount.
+    expect(JSON.stringify(view)).not.toMatch(/agencyFee|adSpend|_internal|"normal"|%|\b25\b/);
+    expect(typeof view.foundingClient).toBe("boolean");
     expect([view.minPrice, view.midPrice, view.maxPrice]).toEqual([result.minPrice, result.midPrice, result.maxPrice]);
   });
 
@@ -263,6 +306,31 @@ describe("internal split (never client-facing)", () => {
       visits: ads.expectedVisits,
       leads: ads.expectedLeads,
     });
+  });
+});
+
+describe("founding-client badge — أول 10 زبائن", () => {
+  it("shows the badge while the client is among the first 10, and removes it afterwards", () => {
+    expect(FOUNDING_BADGE.ar).toBe("🎉 مبروك! أنت من أول 10 زبائن لأفق — أسعار خاصة + مراجعات إضافية مجاناً");
+
+    const founding = calculateServiceEstimate(input({ type: "ads", budget: "500_1500", customerCount: 9 }));
+    const normal = calculateServiceEstimate(input({ type: "ads", budget: "500_1500", customerCount: 10 }));
+
+    expect(toClientPricingView(founding, "ar").foundingClient).toBe(true);
+    expect(toClientPricingView(founding, "en").foundingClient).toBe(true);
+    expect(toClientPricingView(normal, "ar").foundingClient).toBe(false);
+
+    const text = describeClientEstimate(founding, "ar");
+    expect(text).toContain(FOUNDING_BADGE.ar);
+    // It sits right under the budget read, before the results.
+    expect(text.indexOf(FOUNDING_BADGE.ar)).toBeGreaterThan(text.indexOf("📊 تقييم الميزانية"));
+    expect(text.indexOf(FOUNDING_BADGE.ar)).toBeLessThan(text.indexOf("📈 النتائج المتوقعة"));
+    // The badge promises free extra revisions; it must never name a percentage or a fee.
+    expect(FOUNDING_BADGE.ar).not.toMatch(/أتعاب|عمولة|نصيب|%|توزيع/);
+
+    expect(describeClientEstimate(normal, "ar")).not.toContain("مبروك");
+    expect(describeClientEstimate(founding, "en")).toContain(FOUNDING_BADGE.en);
+    expect(describeClientEstimate(normal, "en")).not.toContain("Congratulations");
   });
 });
 
