@@ -2,6 +2,14 @@
 
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 
+import {
+  CLIENTS_COUNTED_SO_FAR,
+  calculateServiceEstimate,
+  describeClientEstimate,
+  type BudgetBand,
+  type PricingInput,
+  type PricingServiceType,
+} from "@/lib/agents/pricing-agent";
 import type { Locale } from "@/lib/domain/types";
 import { dictionaries } from "@/lib/i18n/dictionaries";
 
@@ -105,24 +113,46 @@ export const SERVICE_REQUEST_QUESTIONS: Record<ServiceRequestQuestionStep, Servi
   BUDGET: {
     answerKey: "budget",
     question: { ar: "شنو الميزانية التقريبية؟", en: "What is your approximate budget?" },
+    // The bands are the pricing agent's `BudgetBand` ids on purpose: the answer
+    // goes straight into `calculateServiceEstimate` with no translation, and the
+    // same numbers (200/500/1500) drive the budget evaluation it shows back.
     options: [
-      { id: "under_300", label: { ar: "أقل من 300$", en: "Under $300" } },
-      { id: "300_700", label: { ar: "300-700$", en: "$300-700" } },
-      { id: "700_1500", label: { ar: "700-1500$", en: "$700-1500" } },
+      { id: "under_200", label: { ar: "أقل من 200$", en: "Under $200" } },
+      { id: "200_500", label: { ar: "200-500$", en: "$200-500" } },
+      { id: "500_1500", label: { ar: "500-1500$", en: "$500-1500" } },
       { id: "over_1500", label: { ar: "أكثر من 1500$", en: "Over $1500" } },
     ],
   },
 };
 
+/** الباقات القديمة (أقل من 300$ / 300-700$ / 700-1500$) تُترجم عند قراءة طلب محفوظ قبل التحديث. */
+const LEGACY_BUDGET_OPTION_IDS: Record<string, string> = {
+  under_300: "under_200",
+  "300_700": "200_500",
+  "700_1500": "500_1500",
+};
+
+/** The service option ids of the TYPE question as the pricing agent's service types. */
+const SERVICE_TYPE_BY_OPTION: Record<string, PricingServiceType> = {
+  design: "design",
+  ads: "ads",
+  social_media: "social",
+  content: "content",
+  seo: "seo",
+  other: "other",
+};
+
 const SERVICE_REQUEST_STORAGE_KEY = "ofoq:chat:service-request";
 const SERVICE_REQUEST_WELCOME_ID = "service-request-welcome";
+/** The closing assistant message of a completed request: the price estimation. */
+const SERVICE_REQUEST_ESTIMATE_ID = "service-request-estimate";
 /** First assistant message of a service request. Displayed in the chat only; it is not saved to the conversation. */
 const SERVICE_REQUEST_WELCOME: Record<Locale, string> = {
   ar: "أهلاً بك في أفق 👋\nأنا مساعد أفق، راح أساعدك تجهّز طلبك خطوة بخطوة.\n\nأول شي: شنو نوع الخدمة اللي تحتاجها؟ (تصميم / إعلانات / سوشيال ميديا / محتوى / SEO / غير ذلك)",
   en: "Welcome to Ofoq 👋\nI'm the Ofoq assistant, and I'll help you build your request step by step.\n\nFirst: what type of service do you need? (Design / Ads / Social media / Content / SEO / Other)",
 };
 
-/** Shown after the last answer. The flow stops here: no price is requested yet. */
+/** Shown after the last answer; the price estimation follows it immediately. */
 function serviceRequestSummary(answers: ServiceRequestAnswers, locale: Locale): string {
   const label = (step: ServiceRequestQuestionStep) => optionLabel(step, answers[SERVICE_REQUEST_QUESTIONS[step].answerKey], locale);
   return locale === "ar"
@@ -140,6 +170,55 @@ function nextServiceRequestStep(step: ServiceRequestStep): ServiceRequestStep {
 
 function isQuestionStep(step: ServiceRequestStep): step is ServiceRequestQuestionStep {
   return step !== "SUMMARY";
+}
+
+/** True once every question has an answer: only then can the estimate be shown. */
+export function isServiceRequestComplete(answers: ServiceRequestAnswers): boolean {
+  return SERVICE_REQUEST_STEPS.filter(isQuestionStep).every(
+    (step) => Boolean(answers[SERVICE_REQUEST_QUESTIONS[step].answerKey]),
+  );
+}
+
+/**
+ * The guided answers as the pricing agent's input.
+ *
+ * Every value is checked against the option ids the questions actually offer and
+ * falls back to the most conservative reading, so a hand-edited sessionStorage
+ * entry can never price something the client did not ask for.
+ */
+export function requestPricingInput(
+  answers: ServiceRequestAnswers,
+  customerCount = CLIENTS_COUNTED_SO_FAR,
+): PricingInput {
+  const budget: BudgetBand = isBudgetBand(answers.budget) ? answers.budget : "under_200";
+  return {
+    type: SERVICE_TYPE_BY_OPTION[answers.type ?? "other"] ?? "other",
+    size: answers.size === "small" || answers.size === "large" ? answers.size : "medium",
+    platforms: answers.platforms === "multiple" ? "multiple" : "single",
+    deadline:
+      answers.deadline === "urgent_3_days" ? "urgent" : answers.deadline === "flexible_14_days" ? "flexible" : "normal",
+    budget,
+    customerCount,
+  };
+}
+
+function isBudgetBand(value: string | undefined): value is BudgetBand {
+  return value === "under_200" || value === "200_500" || value === "500_1500" || value === "over_1500";
+}
+
+/**
+ * نص التقدير المبدئي بعد الملخص. الصياغة نفسها في وكيل التسعير
+ * (`describeClientEstimate`) حتى تبقى مبنية على ما يُسمح بعرضه فقط.
+ *
+ * The wording lives in the pricing agent, which writes it from the client view
+ * alone — the agency fee and the ad-spend split have no path into this text.
+ */
+export function serviceRequestEstimate(
+  answers: ServiceRequestAnswers,
+  locale: Locale,
+  customerCount = CLIENTS_COUNTED_SO_FAR,
+): string {
+  return describeClientEstimate(calculateServiceEstimate(requestPricingInput(answers, customerCount)), locale);
 }
 
 /**
@@ -308,7 +387,8 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
         <div className="chat-messages" role="log" aria-live="polite" aria-relevant="additions text">
           {loading ? <div className="chat-loading"><span className="loading-orbit" />{ar ? "جارٍ فتح المحادثة…" : "Opening your conversation…"}</div> : visibleMessages.length === 0 ? <div className="chat-loading">{ar ? "لا توجد رسائل بعد. ابدأ بكتابة ما تحتاجه." : "No messages yet. Tell us what you need."}</div> : visibleMessages.map((message) => {
             const own = message.sender === "CLIENT";
-            return <article className={`chat-message ${own ? "chat-message-client" : "chat-message-assistant"}`} key={message.id}>
+            const estimate = message.id === SERVICE_REQUEST_ESTIMATE_ID;
+            return <article className={`chat-message ${own ? "chat-message-client" : "chat-message-assistant"}${estimate ? " chat-message-estimate" : ""}`} key={message.id}>
               {!own && <span className="message-sender">{message.sender === "STAFF" ? (ar ? "فريق أفق" : "Ofoq team") : copy.title}</span>}
               <p dir={message.language === "en" ? "ltr" : message.language === "ar" ? "rtl" : undefined}>{message.body}</p>
 
@@ -384,7 +464,12 @@ function readServiceRequest(): ServiceRequestContext | null {
     const stored = JSON.parse(window.sessionStorage.getItem(SERVICE_REQUEST_STORAGE_KEY) ?? "null");
     if (stored?.intent !== "service_request" || typeof stored.conversationId !== "string") return null;
     const answerLog: ServiceRequestAnswerEvent[] = Array.isArray(stored.answerLog) ? stored.answerLog : [];
-    const answers: ServiceRequestAnswers = stored.answers && typeof stored.answers === "object" ? stored.answers : {};
+    const answers: ServiceRequestAnswers = stored.answers && typeof stored.answers === "object" ? { ...stored.answers } : {};
+    // A request saved before the budget bands changed keeps its answer: the old
+    // ids are translated to the band that covers the same range.
+    if (typeof answers.budget === "string" && LEGACY_BUDGET_OPTION_IDS[answers.budget]) {
+      answers.budget = LEGACY_BUDGET_OPTION_IDS[answers.budget];
+    }
     const step: ServiceRequestStep = SERVICE_REQUEST_STEPS[answerLog.length];
     const consistent = answerLog.length < SERVICE_REQUEST_STEPS.length && stored.step === step && answerLog.every((event, index) => {
       const expected = SERVICE_REQUEST_STEPS[index] as ServiceRequestQuestionStep;
@@ -403,7 +488,9 @@ function readServiceRequest(): ServiceRequestContext | null {
  * Merges the displayed service-request exchange into the saved history: the
  * welcome after its anchor message, then for each answer the client's choice
  * followed by the next question (or the summary) after the message that was
- * last when it was chosen. Entries whose anchor is no longer loaded go first.
+ * last when it was chosen, and finally — once every question is answered — the
+ * price estimation the pricing agent computed. Entries whose anchor is no
+ * longer loaded go first.
  */
 function withServiceRequest(messages: ChatMessage[], context: ServiceRequestContext, locale: Locale): ChatMessage[] {
   const entries: Array<{ afterMessageId: string | null; message: ChatMessage }> = [
@@ -416,6 +503,20 @@ function withServiceRequest(messages: ChatMessage[], context: ServiceRequestCont
       { afterMessageId: event.afterMessageId, message: { id: `service-request-answer-${event.step}`, sender: "CLIENT", body: optionLabel(event.step, answer, locale), language: locale, createdAt: event.answeredAt } },
       { afterMessageId: event.afterMessageId, message: { id: `service-request-${next.toLowerCase()}`, sender: "ASSISTANT", body: isQuestionStep(next) ? SERVICE_REQUEST_QUESTIONS[next].question[locale] : serviceRequestSummary(context.answers, locale), language: locale, createdAt: event.answeredAt } },
     );
+  }
+  if (isServiceRequestComplete(context.answers)) {
+    // Anchored to the BUDGET answer, i.e. displayed right after the summary.
+    const last = context.answerLog[context.answerLog.length - 1];
+    entries.push({
+      afterMessageId: last ? last.afterMessageId : context.afterMessageId,
+      message: {
+        id: SERVICE_REQUEST_ESTIMATE_ID,
+        sender: "ASSISTANT",
+        body: serviceRequestEstimate(context.answers, locale),
+        language: locale,
+        createdAt: last ? last.answeredAt : context.startedAt,
+      },
+    });
   }
   const loaded = new Set(messages.map((message) => message.id));
   const placed = (anchor: string | null) => entries.filter((entry) => entry.afterMessageId === anchor).map((entry) => entry.message);
