@@ -31,6 +31,10 @@ const middlewareSource = fs.readFileSync(path.join(rootDir, "src", "middleware.t
 const detailRouteSource = fs.readFileSync(path.join(rootDir, "src", "app", "api", "admin", "alerts", "[id]", "route.ts"), "utf8");
 const listRouteSource = fs.readFileSync(path.join(rootDir, "src", "app", "api", "admin", "alerts", "route.ts"), "utf8");
 const alertRouteLogSource = fs.readFileSync(path.join(rootDir, "src", "lib", "admin", "alert-route-log.ts"), "utf8");
+/** The shared gate/logging module every alert action route runs through. */
+const alertRouteGuardSource = fs.readFileSync(path.join(rootDir, "src", "lib", "admin", "alert-route-guard.ts"), "utf8");
+const replyRouteSource = fs.readFileSync(path.join(rootDir, "src", "app", "api", "admin", "alerts", "[id]", "reply", "route.ts"), "utf8");
+const resolveRouteSource = fs.readFileSync(path.join(rootDir, "src", "app", "api", "admin", "alerts", "[id]", "resolve", "route.ts"), "utf8");
 const alertMigration = fs.readFileSync(path.join(rootDir, "db", "migrations", "supabase", "0007_admin_alerts.sql"), "utf8");
 const setupBundle = fs.readFileSync(path.join(rootDir, "docs", "setup", "supabase-setup.sql"), "utf8");
 
@@ -272,7 +276,13 @@ describe("wiring guards", () => {
     walk(path.join(rootDir, "src", "app", "api"));
 
     const uncovered = routes
-      .filter((file) => fs.readFileSync(file, "utf8").includes("requireSupabaseUser("))
+      // `requireStaffAccess(` counts too: the two dedicated alert action routes
+      // read the session through the shared gate, and they must still be covered
+      // by the matcher or a refresh never reaches them.
+      .filter((file) => {
+        const source = fs.readFileSync(file, "utf8");
+        return source.includes("requireSupabaseUser(") || source.includes("requireStaffAccess(");
+      })
       .map((file) => {
         const segments = path
           .relative(path.join(rootDir, "src", "app"), path.dirname(file))
@@ -287,19 +297,25 @@ describe("wiring guards", () => {
     // The two staff endpoints this investigation is about are matched, too.
     expect(covers("/api/admin/alerts")).toBe(true);
     expect(covers("/api/admin/alerts/28cd84e5-1111-2222-3333-444455556666")).toBe(true);
+    expect(covers("/api/admin/alerts/28cd84e5-1111-2222-3333-444455556666/reply")).toBe(true);
+    expect(covers("/api/admin/alerts/28cd84e5-1111-2222-3333-444455556666/resolve")).toBe(true);
     expect(covers("/api/me")).toBe(true);
   });
 
   it("hands the request to the auth helper and logs the session on failure", () => {
-    expect(detailRouteSource).toContain("requireSupabaseUser(request)");
     expect(listRouteSource).toContain("requireSupabaseUser(request)");
-    for (const source of [detailRouteSource, listRouteSource]) {
-      // One log line per failure, in the same shape, from the same helper.
-      expect(source).toContain("logAdminAlertGateFailure(");
-      expect(source).toContain("logAdminAlertFailure(");
-      expect(source).toContain("exposeHint: true");
+    // Every staff alert route — details, the action form and the two dedicated
+    // action routes — runs through ONE gate, so a failure is logged identically
+    // no matter which button caused it.
+    for (const source of [detailRouteSource, replyRouteSource, resolveRouteSource]) {
+      expect(source).toContain("requireStaffAccess(request,");
     }
-    expect(detailRouteSource).toContain("alertId: context.alertId");
+    expect(alertRouteGuardSource).toContain("requireSupabaseUser(request)");
+    // One log line per failure, in the same shape, from the same helper.
+    expect(alertRouteGuardSource).toContain("logAdminAlertGateFailure(");
+    expect(alertRouteGuardSource).toContain("logAdminAlertFailure(");
+    expect(alertRouteGuardSource).toContain("exposeHint: true");
+    expect(alertRouteGuardSource).toContain("alertId: context.alertId");
     // The four fields the log line must always carry (see alert-route-log.ts).
     for (const field of ["hasSession", "userId", "cookieCount", "rpcError", "cookieNames", "projectRef"]) {
       expect(alertRouteLogSource).toContain(field);
