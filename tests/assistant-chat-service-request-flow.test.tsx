@@ -11,7 +11,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AssistantChat } from "../src/components/assistant-chat";
+import { AssistantChat, matchServiceOption } from "../src/components/assistant-chat";
 
 const STORAGE_KEY = "ofoq:chat:service-request";
 const WELCOME_AR = "أهلاً بك في أفق 👋\nأنا مساعد أفق، راح أساعدك تجهّز طلبك خطوة بخطوة.\n\nأول شي: شنو نوع الخدمة اللي تحتاجها؟ (تصميم / إعلانات / سوشيال ميديا / محتوى / SEO / غير ذلك)";
@@ -70,6 +70,13 @@ async function openChat(locale: "ar" | "en" = "ar", welcome = WELCOME_AR): Promi
 
 function choose(label: string): void {
   fireEvent.click(screen.getByRole("button", { name: label }));
+}
+
+/** Types a message in the composer and sends it, as the client would. */
+function type(text: string): void {
+  const composer = screen.getByRole("textbox");
+  fireEvent.change(composer, { target: { value: text } });
+  fireEvent.submit(composer.closest("form")!);
 }
 
 async function answerEverything(): Promise<void> {
@@ -255,5 +262,70 @@ describe("guided service request conversation", () => {
     await openChat();
     expect(shownBodies()).toEqual([greeting.body, WELCOME_AR]);
     expect(shownOptions()).toEqual(["تصميم", "إعلانات", "سوشيال ميديا", "محتوى", "SEO", "غير ذلك"]);
+  });
+});
+
+describe("typed answers during the guided conversation", () => {
+  it("typed answer matches option: «تصميم» counts as choosing design, like the button", async () => {
+    await openChat();
+
+    type("تصميم");
+
+    await waitFor(() => expect(shownBodies()).toEqual([greeting.body, WELCOME_AR, "تصميم", QUESTION_AR.SIZE]));
+    expect(storedContext()).toMatchObject({ step: "SIZE", answers: { type: "design" } });
+    expect(shownOptions()).toEqual(["صغير", "متوسط", "كبير"]);
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
+    expect(postCalls()).toHaveLength(0);
+  });
+
+  it("accepts English labels and ids in any case, with extra spaces, punctuation or Arabic letter variants", async () => {
+    await openChat();
+
+    type("  Design ");
+    await waitFor(() => expect(storedContext()).toMatchObject({ step: "SIZE", answers: { type: "design" } }));
+    // The client's bubble shows the option label in the interface language, exactly as a button tap would.
+    expect(shownBodies().slice(-2)).toEqual(["تصميم", QUESTION_AR.SIZE]);
+
+    type("MEDIUM");
+    await waitFor(() => expect(storedContext()).toMatchObject({ step: "PLATFORMS", answers: { size: "medium" } }));
+    type("instagram.");
+    await waitFor(() => expect(storedContext()).toMatchObject({ step: "DEADLINE", answers: { platforms: "instagram" } }));
+    type("مستعجل (3 أيام)");
+    await waitFor(() => expect(storedContext()).toMatchObject({ step: "BUDGET", answers: { deadline: "urgent_3_days" } }));
+    type("300-700$");
+
+    await waitFor(() => expect(shownBodies().at(-1)).toBe(SUMMARY_AR));
+    expect(postCalls()).toHaveLength(0);
+
+    expect(matchServiceOption("TYPE", "social_media")).toBe("social_media");
+    expect(matchServiceOption("TYPE", "Social Media")).toBe("social_media");
+    expect(matchServiceOption("TYPE", "اعلانات")).toBe("ads");
+    expect(matchServiceOption("TYPE", "ســيو")).toBeNull();
+    expect(matchServiceOption("SIZE", "متوسط؟")).toBe("medium");
+  });
+
+  it("sends text that matches no option of the open question to the assistant", async () => {
+    await openChat();
+
+    // «كبير» is an option of SIZE, not of TYPE; a sentence that contains «تصميم» is not the option itself.
+    type("كبير");
+    await waitFor(() => expect(shownBodies().at(-1)).toBe(REPLY));
+    type("أريد تصميم شعار");
+    await waitFor(() => expect(postCalls()).toHaveLength(2));
+
+    expect(postCalls().map(([, init]) => JSON.parse(String(init?.body)))).toEqual([{ message: "كبير" }, { message: "أريد تصميم شعار" }]);
+    expect(storedContext()).toMatchObject({ step: "TYPE", answers: {}, answerLog: [] });
+    expect(shownOptions()).toHaveLength(6);
+  });
+
+  it("sends typed text to the assistant after the summary, even when it names an option", async () => {
+    await openChat();
+    await answerEverything();
+
+    type("تصميم");
+
+    await waitFor(() => expect(shownBodies().at(-1)).toBe(REPLY));
+    expect(postCalls().map(([, init]) => JSON.parse(String(init?.body)))).toEqual([{ message: "تصميم" }]);
+    expect(storedContext()).toMatchObject({ step: "SUMMARY", answers: { type: "design" } });
   });
 });

@@ -142,6 +142,33 @@ function isQuestionStep(step: ServiceRequestStep): step is ServiceRequestQuestio
   return step !== "SUMMARY";
 }
 
+/**
+ * The option of `step` a typed message stands for, if any: it must be the whole
+ * message and equal an option's Arabic label, English label or id ("تصميم",
+ * "Design", "design"). Case, extra spaces, trailing punctuation, "_"/"-" and
+ * Arabic letter variants (أ/إ/آ, ة/ه, ى/ي, tatweel) are ignored.
+ */
+export function matchServiceOption(step: ServiceRequestQuestionStep, text: string): string | null {
+  const typed = normalizeAnswer(text);
+  if (!typed) return null;
+  const match = SERVICE_REQUEST_QUESTIONS[step].options.find((option) =>
+    [option.id, option.label.ar, option.label.en].some((candidate) => normalizeAnswer(candidate) === typed));
+  return match?.id ?? null;
+}
+
+function normalizeAnswer(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\u0640/g, "")
+    .replace(/[أإآ]/g, "ا")
+    .replace(/ة/g, "ه")
+    .replace(/ى/g, "ي")
+    .replace(/[_\-–]/g, " ")
+    .replace(/[.!?؟،,؛;]+$/u, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function AssistantChat({ locale, intent }: { locale: Locale; intent?: string }) {
   const ar = locale === "ar";
   const copy = dictionaries[locale].assistant;
@@ -186,6 +213,14 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
     event?.preventDefault();
     const message = input.trim();
     if (!message || sending || loading || !ready) return;
+    // A typed answer that names an option of the open question counts as choosing it (same as the button).
+    const typedOption = serviceRequest && isQuestionStep(serviceRequest.step) ? matchServiceOption(serviceRequest.step, message) : null;
+    if (typedOption) {
+      setError("");
+      setInput("");
+      chooseServiceOption(typedOption);
+      return;
+    }
     setError("");
     setInput("");
     setSending(true);
@@ -221,8 +256,9 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
   }
 
   /**
-   * A guided answer: saved in the request context (and sessionStorage), then the
-   * next question — or the summary after BUDGET — is shown. Nothing is sent to the API.
+   * A guided answer, from a button or a typed message that matches an option:
+   * saved in the request context (and sessionStorage), then the next question —
+   * or the summary after BUDGET — is shown. Nothing is sent to the API.
    */
   function chooseServiceOption(optionId: string) {
     if (!serviceRequest || sending || !isQuestionStep(serviceRequest.step)) return;
