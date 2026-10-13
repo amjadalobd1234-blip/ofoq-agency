@@ -1,57 +1,64 @@
 // @vitest-environment jsdom
 /**
- * The guided service-request order is TYPE → SIZE → PLATFORMS → DEADLINE →
- * BUDGET → BUSINESS_TYPE → PRICE_RANGE → TARGETING → SUMMARY + PRICING.
+ * The guided service-request order is:
+ *
+ *   TYPE → SIZE → BUDGET → TARGETING → SUMMARY + PRICING → CONTACT
+ *
+ * and nothing else is asked: platforms, delivery time, project type and product
+ * price were removed, the delivery is planned as normal, and the number of
+ * platforms is inferred from the budget.
  */
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   AssistantChat,
+  SERVICE_REQUEST_BASIC_STEPS,
   SERVICE_REQUEST_QUESTIONS,
+  SERVICE_REQUEST_ORDER_CODE,
   SERVICE_REQUEST_STEPS,
+  SERVICE_REQUEST_WELCOME,
   isServiceRequestComplete,
   matchServiceOption,
+  serviceRequestClarification,
   serviceRequestEstimate,
+  serviceRequestSummary,
 } from "../src/components/assistant-chat";
 
 const STORAGE_KEY = "ofoq:chat:service-request";
-const WELCOME_AR = "أهلاً بك في أفق 👋\nأنا مساعد أفق، راح أساعدك تجهّز طلبك خطوة بخطوة.\n\nأول شي: شنو نوع الخدمة اللي تحتاجها؟ (تصميم / إعلانات / سوشيال ميديا / محتوى / SEO / غير ذلك)";
-const WELCOME_EN = "Welcome to Ofoq 👋\nI'm the Ofoq assistant, and I'll help you build your request step by step.\n\nFirst: what type of service do you need? (Design / Ads / Social media / Content / SEO / Other)";
+const WELCOME_AR = SERVICE_REQUEST_WELCOME.ar;
+const WELCOME_EN = SERVICE_REQUEST_WELCOME.en;
+const CLIENT_EMAIL = "client@example.com";
 const REPLY = "أكيد، أي سؤال ثاني؟";
 
 const QUESTION_AR = {
   TYPE: "شنو نوع الخدمة اللي تحتاجها؟",
   SIZE: "شكد حجم المشروع؟",
-  PLATFORMS: "على أي منصات تريد نشتغل؟",
-  DEADLINE: "شكد وقت عندك للتسليم؟",
   BUDGET: "شنو الميزانية التقريبية؟",
-  BUSINESS_TYPE: "شنو نوع مشروعك؟",
-  PRICE_RANGE: "شكد سعر منتجاتك تقريباً؟",
   TARGETING: "وين تريد تستهدف إعلانك؟",
+  CONTACT: "كيف تحب يتواصل معك فريق أفق؟",
 };
 
-const ANSWERS_AR = {
-  type: "design",
-  size: "medium",
-  platforms: "instagram",
-  deadline: "urgent_3_days",
-  budget: "200_500",
-  businessType: "online_store",
-  priceRange: "50k_150k",
-  targeting: "iraq_all",
-};
+const ANSWERS_AR = { type: "ads", size: "medium", budget: "under_200", targeting: "iraq_all" };
 
-const SUMMARY_AR = "تمام، فهمت طلبك 👌\n\n- الخدمة: تصميم\n- الحجم: متوسط\n- المنصات: Instagram\n- التسليم: مستعجل (3 أيام)\n- الميزانية: 200-500$\n- نوع المشروع: 🛍️ متجر إلكتروني\n- سعر المنتج: 50,000 - 150,000\n- المنطقة المستهدفة: 🇮🇶 العراق كله\n\nخليني أحسب لك تقديراً واضحاً...";
-const ESTIMATE_AR = serviceRequestEstimate(ANSWERS_AR, "ar");
+const SUMMARY_AR = serviceRequestSummary(ANSWERS_AR, "ar");
+const ESTIMATE_AR = serviceRequestEstimate(ANSWERS_AR, "ar", { email: CLIENT_EMAIL });
 
 interface SavedMessage { id: string; sender: string; body: string; language: string; createdAt: string }
 
 const greeting: SavedMessage = { id: "m-greeting", sender: "ASSISTANT", body: "أهلًا بك في أفق. أنا مساعد أفق، مساعد ذكي تابع للوكالة.", language: "ar", createdAt: "2026-10-12T05:00:00.000Z" };
 let saved: SavedMessage[] = [];
+/** What /api/chat/service-intent answers in this test. */
+let intentOptionId: string | null = null;
 
 function stubChatApi(): void {
-  vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    if (String(url).includes("service-intent")) {
+      return Response.json({ data: { optionId: intentOptionId, source: intentOptionId ? "ai" : "none" } });
+    }
+    if (String(url).includes("service-request")) {
+      return Response.json({ data: { orderCode: SERVICE_REQUEST_ORDER_CODE } });
+    }
     if (init?.method === "POST") {
       const { message } = JSON.parse(String(init.body)) as { message: string };
       const userMessage: SavedMessage = { id: `m-${saved.length + 1}`, sender: "CLIENT", body: message, language: "ar", createdAt: "2026-10-12T05:01:00.000Z" };
@@ -59,7 +66,10 @@ function stubChatApi(): void {
       saved = [...saved, userMessage, reply];
       return Response.json({ data: { conversationId: "conv-1", userMessage, reply, provider: "rules", providerAvailable: false, escalated: false } });
     }
-    return Response.json({ data: { conversationId: "conv-1", customerName: "امجد", language: "ar", messages: saved }, provider: { configured: false } });
+    return Response.json({
+      data: { conversationId: "conv-1", customerName: "امجد", email: CLIENT_EMAIL, language: "ar", messages: saved },
+      provider: { configured: false },
+    });
   }));
 }
 
@@ -75,8 +85,9 @@ function storedContext(): Record<string, any> | null {
   return JSON.parse(window.sessionStorage.getItem(STORAGE_KEY) ?? "null");
 }
 
-function postCalls() {
-  return vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === "POST");
+/** POSTs to exactly `path` (so /api/chat does not match /api/chat/service-request). */
+function postCalls(path?: string) {
+  return vi.mocked(fetch).mock.calls.filter(([url, init]) => init?.method === "POST" && (!path || new URL(String(url), "http://localhost").pathname === path));
 }
 
 async function openChat(locale: "ar" | "en" = "ar", welcome = WELCOME_AR): Promise<void> {
@@ -100,31 +111,14 @@ async function chooseAndWait(label: string, expectedNextBody: string): Promise<v
 }
 
 async function answerEverything(): Promise<void> {
-  const answers = [
-    "تصميم",
-    "متوسط",
-    "Instagram",
-    "مستعجل (3 أيام)",
-    "200-500$",
-    "🛍️ متجر إلكتروني",
-    "50,000 - 150,000",
-    "🇮🇶 العراق كله",
-  ];
-  const followingBodies = [
-    QUESTION_AR.SIZE,
-    QUESTION_AR.PLATFORMS,
-    QUESTION_AR.DEADLINE,
-    QUESTION_AR.BUDGET,
-    QUESTION_AR.BUSINESS_TYPE,
-    QUESTION_AR.PRICE_RANGE,
-    QUESTION_AR.TARGETING,
-    SUMMARY_AR,
-  ];
-  for (const [index, answer] of answers.entries()) await chooseAndWait(answer, followingBodies[index]!);
+  const answers = ["إعلانات", "متوسط", "أقل من 200$", "🇮🇶 العراق كله", `📧 إيميل: ${CLIENT_EMAIL}`];
+  const following = [QUESTION_AR.SIZE, QUESTION_AR.BUDGET, QUESTION_AR.TARGETING, SUMMARY_AR, "تم حفظ طلبك ✅"];
+  for (const [index, answer] of answers.entries()) await chooseAndWait(answer, following[index]!);
 }
 
 beforeEach(() => {
   saved = [greeting];
+  intentOptionId = null;
   Element.prototype.scrollIntoView = vi.fn();
   stubChatApi();
 });
@@ -137,150 +131,89 @@ afterEach(() => {
 });
 
 describe("guided service request order and saved answers", () => {
-  it("runs the nine steps in the requested order", async () => {
-    expect(SERVICE_REQUEST_STEPS).toEqual([
-      "TYPE", "SIZE", "PLATFORMS", "DEADLINE", "BUDGET", "BUSINESS_TYPE", "PRICE_RANGE", "TARGETING", "SUMMARY",
-    ]);
-    await openChat();
+  it("asks only TYPE, SIZE, BUDGET and TARGETING before the summary and the pricing", async () => {
+    expect(SERVICE_REQUEST_BASIC_STEPS).toEqual(["TYPE", "SIZE", "BUDGET", "TARGETING"]);
+    expect(SERVICE_REQUEST_STEPS.slice(0, 6)).toEqual(["TYPE", "SIZE", "BUDGET", "TARGETING", "SUMMARY", "CONTACT"]);
+    // The removed questions are gone from the flow and from the definitions.
+    expect(Object.keys(SERVICE_REQUEST_QUESTIONS)).toEqual(["TYPE", "SIZE", "BUDGET", "TARGETING", "CONTACT"]);
+    expect(SERVICE_REQUEST_STEPS).not.toContain("PLATFORMS");
+    expect(SERVICE_REQUEST_STEPS).not.toContain("DEADLINE");
 
+    await openChat();
     expect(shownOptions()).toEqual(["تصميم", "إعلانات", "سوشيال ميديا", "محتوى", "SEO", "غير ذلك"]);
-    await answerEverything();
-    expect(shownBodies().slice(-2)).toEqual([SUMMARY_AR, ESTIMATE_AR]);
-    expect(storedContext()).toMatchObject({ step: "SUMMARY", answers: ANSWERS_AR });
+
+    await chooseAndWait("إعلانات", QUESTION_AR.SIZE);
+    await chooseAndWait("متوسط", QUESTION_AR.BUDGET);
+    await chooseAndWait("أقل من 200$", QUESTION_AR.TARGETING);
+    await chooseAndWait("🇮🇶 العراق كله", SUMMARY_AR);
+
+    // Summary then pricing, in that order, and only then the contact channel.
+    expect(shownBodies().filter((body) => body === SUMMARY_AR)).toHaveLength(1);
+    expect(shownBodies().some((body) => body === ESTIMATE_AR)).toBe(true);
+    expect(shownOptions()).toEqual(["📱 واتساب", `📧 إيميل: ${CLIENT_EMAIL}`, "💬 إشعار في الموقع"]);
+    expect(isServiceRequestComplete(storedContext()?.answers)).toBe(true);
   });
 
-  it("saves BUSINESS_TYPE and advances to PRICE_RANGE", async () => {
-    await openChat();
-    await chooseAndWait("تصميم", QUESTION_AR.SIZE);
-    await chooseAndWait("متوسط", QUESTION_AR.PLATFORMS);
-    await chooseAndWait("Instagram", QUESTION_AR.DEADLINE);
-    await chooseAndWait("مستعجل (3 أيام)", QUESTION_AR.BUDGET);
-    await chooseAndWait("200-500$", QUESTION_AR.BUSINESS_TYPE);
-    expect(shownOptions()).toEqual([
-      "🛍️ متجر إلكتروني",
-      "🏪 متجر محلي",
-      "🍽️ مطعم/مقهى",
-      "💼 خدمة (استشارات، تعليم، تصميم)",
-      "🏗️ عقارات/سيارات",
-      "💎 منتجات فاخرة",
-      "🌐 شي ثاني",
-    ]);
-
-    await chooseAndWait("🛍️ متجر إلكتروني", QUESTION_AR.PRICE_RANGE);
-    expect(storedContext()).toMatchObject({ step: "PRICE_RANGE", answers: { businessType: "online_store" } });
-  });
-
-  it("saves PRICE_RANGE and advances to TARGETING", async () => {
-    await openChat();
-    for (const [answer, next] of [
-      ["تصميم", QUESTION_AR.SIZE],
-      ["متوسط", QUESTION_AR.PLATFORMS],
-      ["Instagram", QUESTION_AR.DEADLINE],
-      ["مستعجل (3 أيام)", QUESTION_AR.BUDGET],
-      ["200-500$", QUESTION_AR.BUSINESS_TYPE],
-      ["🛍️ متجر إلكتروني", QUESTION_AR.PRICE_RANGE],
-    ]) await chooseAndWait(answer, next);
-
-    expect(shownOptions()).toEqual([
-      "أقل من 50,000 دينار",
-      "50,000 - 150,000",
-      "150,000 - 500,000",
-      "أكثر من 500,000",
-    ]);
-    await chooseAndWait("50,000 - 150,000", QUESTION_AR.TARGETING);
-    expect(storedContext()).toMatchObject({ step: "TARGETING", answers: { priceRange: "50k_150k" } });
-  });
-
-  it("saves TARGETING and completes only after the region is selected", async () => {
-    await openChat();
-    for (const [answer, next] of [
-      ["تصميم", QUESTION_AR.SIZE],
-      ["متوسط", QUESTION_AR.PLATFORMS],
-      ["Instagram", QUESTION_AR.DEADLINE],
-      ["مستعجل (3 أيام)", QUESTION_AR.BUDGET],
-      ["200-500$", QUESTION_AR.BUSINESS_TYPE],
-      ["🛍️ متجر إلكتروني", QUESTION_AR.PRICE_RANGE],
-      ["50,000 - 150,000", QUESTION_AR.TARGETING],
-    ]) await chooseAndWait(answer, next);
-
-    expect(shownOptions()).toEqual([
-      "🇮🇶 العراق كله",
-      "🏙️ بغداد فقط",
-      "🌊 البصرة فقط",
-      "🏙️ بغداد + البصرة + أربيل",
-      "🌍 الخليج (السعودية، الإمارات، الكويت)",
-      "🌐 عربي عام",
-    ]);
-    await chooseAndWait("🌊 البصرة فقط", "تمام، فهمت طلبك 👌\n\n- الخدمة: تصميم");
-    expect(storedContext()).toMatchObject({ step: "SUMMARY", answers: { targeting: "basra" } });
-    expect(isServiceRequestComplete(storedContext()!.answers)).toBe(true);
-  });
-
-  it("includes the chosen region in the final summary", async () => {
+  it("infers the platform scope from the budget and never asks for it", async () => {
     await openChat();
     await answerEverything();
 
-    const summary = shownBodies().at(-2)!;
-    expect(summary).toContain("- المنطقة المستهدفة: 🇮🇶 العراق كله");
-    expect(summary).toContain("- نوع المشروع: 🛍️ متجر إلكتروني");
-    expect(summary).toContain("- سعر المنتج: 50,000 - 150,000");
-    expect(storedContext()?.answers.targeting).toBe("iraq_all");
+    const context = storedContext();
+    expect(context?.answers).toMatchObject(ANSWERS_AR);
+    // $200 → a single platform; the pricing message never mentions a platform question.
+    expect(context?.answerLog.map((event: any) => event.step)).toEqual(["TYPE", "SIZE", "BUDGET", "TARGETING", "CONTACT"]);
   });
-});
 
-describe("request persistence and displayed pricing", () => {
-  it("keeps guided choices in session storage and never sends them to the chat API", async () => {
+  it("saves the guided choices in session storage and never sends them to the chat API", async () => {
     await openChat();
     const callsAfterLoad = vi.mocked(fetch).mock.calls.length;
     await answerEverything();
 
-    expect(document.querySelector(".chat-service-options")).toBeNull();
-    expect(vi.mocked(fetch).mock.calls.length).toBe(callsAfterLoad);
-    expect(postCalls()).toHaveLength(0);
+    expect(storedContext()?.step).toBe("DONE");
+    expect(storedContext()?.answers).toMatchObject({ ...ANSWERS_AR, contact: "email" });
+    // Only the completion report leaves the browser; the answers themselves never do.
+    expect(postCalls("/api/chat")).toHaveLength(0);
+    expect(postCalls("/api/chat/service-intent")).toHaveLength(0);
+    expect(postCalls("/api/chat/service-request")).toHaveLength(1);
     expect(saved).toEqual([greeting]);
+    expect(vi.mocked(fetch).mock.calls.length).toBe(callsAfterLoad + 1)
   });
 
-  it("completes the same questions and summary in English", async () => {
+  it("completes the same four questions in English", async () => {
     saved = [{ ...greeting, body: "Welcome to Ofoq.", language: "en" }];
     await openChat("en", WELCOME_EN);
 
     const sequence: Array<[string, string]> = [
-      ["SEO", "How big is the project?"],
-      ["Small", "Which platforms should we work on?"],
-      ["Google", "How much time do you have for delivery?"],
-      ["Standard (7 days)", "What is your approximate budget?"],
-      ["Over $1500", "What kind of business do you have?"],
-      ["🏗️ Real estate/cars", "How much do your products usually cost?"],
-      ["Under IQD 50,000", "Where would you like to target your campaign?"],
-      ["🌍 Gulf (Saudi Arabia, UAE, Kuwait)", "Great, I've got your request 👌"],
+      ["SEO", SERVICE_REQUEST_QUESTIONS.SIZE.question.en],
+      ["Small", SERVICE_REQUEST_QUESTIONS.BUDGET.question.en],
+      ["Over $1500", SERVICE_REQUEST_QUESTIONS.TARGETING.question.en],
+      ["🌍 Gulf (Saudi Arabia, UAE, Kuwait)", serviceRequestSummary({ type: "seo", size: "small", budget: "over_1500", targeting: "gulf" }, "en")],
+      ["📧 Email: " + CLIENT_EMAIL, "Your request was saved ✅"],
     ];
     for (const [answer, next] of sequence) await chooseAndWait(answer, next);
 
-    expect(shownBodies().at(-2)).toContain("- Target area: 🌍 Gulf (Saudi Arabia, UAE, Kuwait)");
-    expect(shownBodies().at(-1)).toContain("Estimated price: $320-$800");
-    expect(storedContext()).toMatchObject({
-      step: "SUMMARY",
-      answers: {
-        type: "seo", size: "small", platforms: "google", deadline: "standard_7_days", budget: "over_1500",
-        businessType: "real_estate", priceRange: "under_50k", targeting: "gulf",
-      },
+    expect(storedContext()?.answers).toMatchObject({
+      type: "seo", size: "small", budget: "over_1500", targeting: "gulf", contact: "email",
     });
+    // SEO is not an advertising service: a price is quoted, impressions are not.
+    expect(shownBodies().some((body) => body.includes("Estimated price"))).toBe(true);
+    expect(shownBodies().some((body) => body.includes("Impressions"))).toBe(false);
   });
 
   it("continues at the current question after a refresh", async () => {
     await openChat();
-    await chooseAndWait("إعلانات", QUESTION_AR.SIZE);
-    await chooseAndWait("صغير", QUESTION_AR.PLATFORMS);
+    await chooseAndWait("تصميم", QUESTION_AR.SIZE);
+    await chooseAndWait("صغير", QUESTION_AR.BUDGET);
     cleanup();
     await openChat();
 
-    expect(shownBodies().at(-1)).toBe(QUESTION_AR.PLATFORMS);
-    expect(shownOptions()).toEqual(["Instagram", "TikTok", "Facebook", "Google", "متعدد"]);
-    await chooseAndWait("TikTok", QUESTION_AR.DEADLINE);
-    expect(storedContext()).toMatchObject({ step: "DEADLINE", answers: { type: "ads", size: "small", platforms: "tiktok" } });
+    expect(shownBodies().at(-1)).toBe(QUESTION_AR.BUDGET);
+    expect(shownOptions()).toEqual(["أقل من 200$", "200-500$", "500-1500$", "أكثر من 1500$"]);
+    await chooseAndWait("200-500$", QUESTION_AR.TARGETING);
+    expect(storedContext()?.answers).toMatchObject({ type: "design", size: "small", budget: "200_500" });
   });
 
-  it("keeps the complete summary and estimate after a refresh", async () => {
+  it("keeps the summary, the pricing and the confirmation after a refresh", async () => {
     await openChat();
     await answerEverything();
     cleanup();
@@ -288,52 +221,77 @@ describe("request persistence and displayed pricing", () => {
 
     expect(shownBodies().filter((body) => body === SUMMARY_AR)).toHaveLength(1);
     expect(shownBodies().filter((body) => body === ESTIMATE_AR)).toHaveLength(1);
-    expect(shownBodies().slice(-2)).toEqual([SUMMARY_AR, ESTIMATE_AR]);
+    expect(shownBodies().some((body) => body.includes(SERVICE_REQUEST_ORDER_CODE))).toBe(true);
     expect(document.querySelector(".chat-service-options")).toBeNull();
-    expect(postCalls()).toHaveLength(0);
+    expect(shownOptions()).toEqual([]);
   });
 });
 
 describe("typed answers in the guided conversation", () => {
-  it("accepts an option id, an English label, and Iraqi-market option ids as typed answers", async () => {
+  it("accepts an option id, an Arabic label, an English label and hamza variants", async () => {
     await openChat();
     type("  Design ");
-    await waitFor(() => expect(storedContext()).toMatchObject({ step: "SIZE", answers: { type: "design" } }));
+    await waitFor(() => expect(storedContext()?.answers.type).toBe("design"));
     type("MEDIUM");
-    await waitFor(() => expect(storedContext()).toMatchObject({ step: "PLATFORMS", answers: { size: "medium" } }));
-    type("instagram.");
-    await waitFor(() => expect(storedContext()).toMatchObject({ step: "DEADLINE", answers: { platforms: "instagram" } }));
-    type("standard_7_days");
-    await waitFor(() => expect(storedContext()).toMatchObject({ step: "BUDGET", answers: { deadline: "standard_7_days" } }));
+    await waitFor(() => expect(storedContext()?.answers.size).toBe("medium"));
     type("under_200");
-    await waitFor(() => expect(storedContext()).toMatchObject({ step: "BUSINESS_TYPE", answers: { budget: "under_200" } }));
-    type("online_store");
-    await waitFor(() => expect(storedContext()).toMatchObject({ step: "PRICE_RANGE", answers: { businessType: "online_store" } }));
-    type("50k_150k");
-    await waitFor(() => expect(storedContext()).toMatchObject({ step: "TARGETING", answers: { priceRange: "50k_150k" } }));
-    type("basra");
-    await waitFor(() => expect(storedContext()).toMatchObject({ step: "SUMMARY", answers: { targeting: "basra" } }));
-    expect(postCalls()).toHaveLength(0);
+    await waitFor(() => expect(storedContext()?.answers.budget).toBe("under_200"));
+    type("أريد استهداف العراق كله");
+    await waitFor(() => expect(storedContext()?.answers.targeting).toBe("iraq_all"));
 
-    expect(matchServiceOption("BUSINESS_TYPE", "online_store")).toBe("online_store");
-    expect(matchServiceOption("PRICE_RANGE", "50k_150k")).toBe("50k_150k");
-    expect(matchServiceOption("TARGETING", "basra")).toBe("basra");
+    // The flow is now on the contact channel, and nothing was sent to the API.
+    expect(storedContext()?.step).toBe("SUMMARY");
+    expect(postCalls("/api/chat")).toHaveLength(0);
     expect(matchServiceOption("TYPE", "اعلانات")).toBe("ads");
     expect(matchServiceOption("SIZE", "متوسط؟")).toBe("medium");
+    expect(matchServiceOption("TARGETING", "أريد استهداف العراق كله")).toBe("iraq_all");
   });
 
-  it("sends text that is not an option to the assistant without advancing the step", async () => {
+  it("asks the AI for the service type when the phrase is not an option, and uses a valid answer", async () => {
     await openChat();
-    type("كبير");
-    await waitFor(() => expect(shownBodies().at(-1)).toBe(REPLY));
-    type("أريد تصميم شعار");
-    await waitFor(() => expect(postCalls()).toHaveLength(2));
+    intentOptionId = "ads";
 
-    expect(postCalls().map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
-      { message: "كبير" },
-      { message: "أريد تصميم شعار" },
-    ]);
-    expect(storedContext()).toMatchObject({ step: "TYPE", answers: {}, answerLog: [] });
+    type("عندي متجر ملابس وأحتاج أوصل لزبائن جدد بميزانية بسيطة");
+
+    await waitFor(() => expect(storedContext()?.answers.type).toBe("ads"));
+    expect(postCalls("/api/chat/service-intent")).toHaveLength(1);
+    expect(JSON.parse(String(postCalls("/api/chat/service-intent")[0]?.[1]?.body))).toEqual({
+      message: "عندي متجر ملابس وأحتاج أوصل لزبائن جدد بميزانية بسيطة",
+    });
+    // A real option was extracted, so the message itself was not sent to the assistant.
+    expect(postCalls("/api/chat")).toHaveLength(0);
+    expect(storedContext()?.step).toBe("SIZE");
+
+    // The same phrase with no intent available asks the client to pick an option.
+    cleanup();
+    window.sessionStorage.clear();
+    await openChat();
+    intentOptionId = null;
+    type("عندي متجر ملابس وأحتاج أوصل لزبائن جدد بميزانية بسيطة");
+    await waitFor(() => expect(shownBodies().some((body) => body.includes("الخيارات المتاحة"))).toBe(true));
+
+    expect(shownBodies().some((body) => body === serviceRequestClarification("TYPE", "ar"))).toBe(true);
+    expect(storedContext()?.answers).toEqual({});
+    expect(storedContext()?.step).toBe("TYPE");
+  });
+
+  it("shows the options again for a vague phrase and keeps the question open", async () => {
+    await openChat();
+
+    type("هلا شلونكم");
+
+    await waitFor(() => expect(shownBodies().some((body) => body.includes("الخيارات المتاحة"))).toBe(true));
+    expect(shownOptions()).toEqual(["تصميم", "إعلانات", "سوشيال ميديا", "محتوى", "SEO", "غير ذلك"]);
+    expect(storedContext()?.step).toBe("TYPE");
+    expect(storedContext()?.answers).toEqual({});
+
+    // The conversation is not stalled: the assistant still answers the message,
+    // and the «pick one of these» note stays the newest thing on screen.
+    await waitFor(() => expect(shownBodies()).toContain(REPLY));
+    expect(shownBodies().at(-1)).toContain("الخيارات المتاحة");
+    // And a real option still moves the request forward afterwards.
+    await chooseAndWait("إعلانات", QUESTION_AR.SIZE);
+    expect(storedContext()?.answers.type).toBe("ads");
   });
 
   it("restarts old or inconsistent stored progress at TYPE", async () => {
@@ -354,16 +312,13 @@ describe("typed answers in the guided conversation", () => {
 });
 
 describe("guided question definitions", () => {
-  it("keeps the prompt and required choices for project type, product price and target area", () => {
-    expect(SERVICE_REQUEST_QUESTIONS.BUSINESS_TYPE.question.ar).toBe("شنو نوع مشروعك؟");
-    expect(SERVICE_REQUEST_QUESTIONS.BUSINESS_TYPE.options.map((option) => option.id)).toEqual([
-      "online_store", "local_store", "restaurant", "service", "real_estate", "luxury", "other",
-    ]);
-    expect(SERVICE_REQUEST_QUESTIONS.PRICE_RANGE.question.ar).toBe("شكد سعر منتجاتك تقريباً؟");
-    expect(SERVICE_REQUEST_QUESTIONS.PRICE_RANGE.options.map((option) => option.id)).toEqual([
-      "under_50k", "50k_150k", "150k_500k", "over_500k",
-    ]);
+  it("keeps the four basic questions plus the contact channel", () => {
+    expect(SERVICE_REQUEST_QUESTIONS.TYPE.question.ar).toBe("شنو نوع الخدمة اللي تحتاجها؟");
+    expect(SERVICE_REQUEST_QUESTIONS.SIZE.question.ar).toBe("شكد حجم المشروع؟");
+    expect(SERVICE_REQUEST_QUESTIONS.BUDGET.question.ar).toBe("شنو الميزانية التقريبية؟");
     expect(SERVICE_REQUEST_QUESTIONS.TARGETING.question.ar).toBe("وين تريد تستهدف إعلانك؟");
+    expect(SERVICE_REQUEST_QUESTIONS.CONTACT.question.ar).toBe("كيف تحب يتواصل معك فريق أفق؟");
+    expect(SERVICE_REQUEST_QUESTIONS.CONTACT.options.map((option) => option.id)).toEqual(["whatsapp", "email", "website"]);
     expect(SERVICE_REQUEST_QUESTIONS.TARGETING.options.map((option) => option.id)).toEqual([
       "iraq_all", "baghdad", "basra", "three_cities", "gulf", "arabic_global",
     ]);

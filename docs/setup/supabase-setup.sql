@@ -1362,6 +1362,7 @@ DECLARE
   v_user_id text := (SELECT auth.uid())::text;
   v_customer_id text;
   v_customer_name text;
+  v_customer_email text;
   v_locale text;
   v_conversation_id text;
   v_messages jsonb;
@@ -1383,8 +1384,8 @@ BEGIN
     RAISE EXCEPTION 'Client profile is not ready' USING ERRCODE = '28000';
   END IF;
 
-  SELECT c.contact_name, c.locale
-  INTO v_customer_name, v_locale
+  SELECT c.contact_name, c.email, c.locale
+  INTO v_customer_name, v_customer_email, v_locale
   FROM public.customers AS c
   WHERE c.id = v_customer_id;
 
@@ -1435,9 +1436,11 @@ BEGIN
     LIMIT 80
   ) AS recent;
 
+  -- `email` lets the guided service request address the client by the address
+  -- registered to the account (shown in the pricing message and the confirmation).
   RETURN jsonb_build_object(
     'conversationId', v_conversation_id, 'customerName', v_customer_name,
-    'language', v_locale, 'messages', v_messages
+    'email', v_customer_email, 'language', v_locale, 'messages', v_messages
   );
 END;
 $function$;

@@ -41,8 +41,11 @@ import { getSupabaseAuthStorageKey, getSupabaseConfig } from "@/lib/supabase/con
  * - `/api/supabase-proxy/:path*` — it is the same-origin tunnel every browser
  *   auth/REST call goes through. Refreshing here would add a Supabase round-trip
  *   to every proxied request (and a refresh loop risk if Supabase is unreachable).
- * - `/api/ai/chat` and `/api/chat` — both accept work before a session exists;
- *   each route still calls `requireSupabaseUser()` itself.
+ * - `/api/ai/chat` and `/api/chat` — both accept work before a session exists
+ *   (the anonymous assistant), so a refresh is unnecessary; each route still
+ *   calls `requireSupabaseUser()` itself. The `/api/chat/:path*` sub-routes
+ *   (service-intent, service-request) are matched: they exist only for signed-in
+ *   clients.
  */
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });
@@ -89,6 +92,9 @@ export const config = {
     "/api/admin/:path*",
     "/api/dashboard",
     "/api/me",
+    // Guided service request: the AI intent layer and the completion report both
+    // read the session (`requireSupabaseUser`), so they need the refresh too.
+    "/api/chat/:path*",
     // Staff-only diagnostics and the staff e-mail action: both read the session
     // from cookies and had no refresh before this entry.
     "/api/debug/:path*",
