@@ -223,6 +223,11 @@ describe("guided request — contact channel", () => {
     await waitFor(() => expect(postCalls("service-request")).toHaveLength(1));
     const payload = JSON.parse(String(postCalls("service-request")[0]?.[1]?.body));
     expect(payload.answers).toMatchObject({ contact: "website", type: "ads" });
-    expect(serviceRequestConfirmation({ contact: "website" }, "ar")).toContain(SERVICE_REQUEST_ORDER_CODE);
+    // The order reference comes from the saved request; before the server
+    // answers the confirmation says the save is in progress, and a failure is
+    // stated plainly — never a silent success.
+    expect(serviceRequestConfirmation({ contact: "website" }, "ar", { submission: { status: "saved", orderCode: SERVICE_REQUEST_ORDER_CODE } })).toContain(SERVICE_REQUEST_ORDER_CODE);
+    expect(serviceRequestConfirmation({ contact: "website" }, "ar")).toContain("جارٍ حفظ طلبك");
+    expect(serviceRequestConfirmation({ contact: "website" }, "ar", { submission: { status: "failed", error: "السبب: X" } })).toContain("تعذر حفظ طلبك ❌");
   });
 });

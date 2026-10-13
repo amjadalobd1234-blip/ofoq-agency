@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 
 import type { AdminAlertDetailsResponse } from "@/lib/admin/alert-types";
 import { normalizeAdminAlertDetails } from "@/lib/admin/payload";
@@ -146,7 +146,7 @@ export function AdminAlertDetail({ alertId, locale }: { alertId: string; locale:
             <span className={`status-pill status-${alert.status.toLowerCase()}`}>{statusLabel(alert.status, locale)}</span>
           </div>
           <h2>{title}</h2>
-          {body && <p>{body}</p>}
+          {body && <p className="admin-alert-body">{linkifyBody(body)}</p>}
           <dl className="admin-alert-facts">
             <div><dt>{ar ? "ورد" : "Received"}</dt><dd>{formatDateTime(alert.createdAt, locale)}</dd></div>
             <div><dt>{ar ? "آخر تحديث" : "Last update"}</dt><dd>{formatDateTime(alert.updatedAt, locale)}</dd></div>
@@ -369,12 +369,31 @@ function statusLabel(status: string, locale: Locale): string {
 }
 
 function categoryLabel(category: string, locale: Locale): string {
-  const labels: Record<string, [string, string]> = { HUMAN_REQUEST: ["طلب فريق بشري", "Human handoff"], NEW_LEAD: ["طلب جديد", "New lead"], escalation: ["تصعيد", "Escalation"], support: ["دعم", "Support"], sales: ["مبيعات", "Sales"], billing: ["فوترة", "Billing"], delivery: ["تنفيذ", "Delivery"], integration: ["تكامل", "Integration"] };
+  const labels: Record<string, [string, string]> = { HUMAN_REQUEST: ["طلب فريق بشري", "Human handoff"], NEW_LEAD: ["طلب جديد", "New lead"], NEW_REQUEST: ["طلب خدمة جديد", "New service request"], escalation: ["تصعيد", "Escalation"], support: ["دعم", "Support"], sales: ["مبيعات", "Sales"], billing: ["فوترة", "Billing"], delivery: ["تنفيذ", "Delivery"], integration: ["تكامل", "Integration"] };
   return labels[category]?.[locale === "ar" ? 0 : 1] ?? category.replaceAll("_", " ");
 }
 
+/**
+ * Renders the alert body with clickable links — a service request carries the
+ * client's `https://wa.me/<number>` link, which must open WhatsApp directly.
+ */
+export function linkifyBody(body: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  const pattern = /https?:\/\/[^\s<>"'،]+/g;
+  let last = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(body)) !== null) {
+    if (match.index > last) parts.push(body.slice(last, match.index));
+    const url = match[0];
+    parts.push(<a key={`${match.index}-${url}`} href={url} target="_blank" rel="noopener noreferrer" dir="ltr">{url}</a>);
+    last = match.index + url.length;
+  }
+  if (last < body.length) parts.push(body.slice(last));
+  return parts;
+}
+
 function activityLabel(action: string, locale: Locale): string {
-  const labels: Record<string, [string, string]> = { "escalation.raised": ["تم رفع التنبيه", "Alert raised"], "alert.acknowledged": ["تم تأكيد المتابعة", "Alert acknowledged"], "alert.resolved": ["تم حل التنبيه", "Alert resolved"], "alert.replied_to_client": ["تم الرد على العميل", "Client replied to"] };
+  const labels: Record<string, [string, string]> = { "escalation.raised": ["تم رفع التنبيه", "Alert raised"], "service_request.submitted": ["تم استلام طلب الخدمة", "Service request received"], "alert.acknowledged": ["تم تأكيد المتابعة", "Alert acknowledged"], "alert.resolved": ["تم حل التنبيه", "Alert resolved"], "alert.replied_to_client": ["تم الرد على العميل", "Client replied to"] };
   return labels[action]?.[locale === "ar" ? 0 : 1] ?? action.replaceAll("_", " ");
 }
 

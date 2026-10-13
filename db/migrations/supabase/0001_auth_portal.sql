@@ -471,7 +471,7 @@ BEGIN
     'customerName', c.contact_name, 'customerEmail', c.email
   ) ORDER BY a.created_at DESC), '[]'::jsonb) INTO v_leads
   FROM (SELECT * FROM public.alerts
-        WHERE category IN ('NEW_LEAD', 'HUMAN_REQUEST') AND status IN ('NEW', 'ACKNOWLEDGED')
+        WHERE category IN ('NEW_LEAD', 'HUMAN_REQUEST', 'NEW_REQUEST') AND status IN ('NEW', 'ACKNOWLEDGED')
         ORDER BY created_at DESC LIMIT 12) AS a
   LEFT JOIN public.customers AS c ON c.id = a.customer_id;
 
@@ -518,8 +518,10 @@ BEGIN
       -- "Urgent alerts" card: everything that needs a human, URGENT and IMPORTANT.
       'urgentAlerts', (SELECT count(*) FROM public.alerts WHERE severity IN ('URGENT', 'IMPORTANT') AND status IN ('NEW', 'ACKNOWLEDGED') AND target_role <> 'CLIENT'),
       'criticalAlerts', (SELECT count(*) FROM public.alerts WHERE severity = 'URGENT' AND status IN ('NEW', 'ACKNOWLEDGED') AND target_role <> 'CLIENT'),
-      -- Open client escalations raised by the assistant (HUMAN_REQUEST + NEW_LEAD).
-      'newLeads', (SELECT count(*) FROM public.alerts WHERE category IN ('NEW_LEAD', 'HUMAN_REQUEST') AND status IN ('NEW', 'ACKNOWLEDGED'))
+      -- Open client requests raised by the assistant: human handoffs
+      -- (HUMAN_REQUEST), understood briefs (NEW_LEAD) and guided service
+      -- requests (NEW_REQUEST, migration 0008).
+      'newLeads', (SELECT count(*) FROM public.alerts WHERE category IN ('NEW_LEAD', 'HUMAN_REQUEST', 'NEW_REQUEST') AND status IN ('NEW', 'ACKNOWLEDGED'))
     ),
     'clients', v_clients, 'requests', v_requests, 'projects', v_projects,
     'campaigns', v_campaigns, 'reports', v_reports, 'alerts', v_alerts,

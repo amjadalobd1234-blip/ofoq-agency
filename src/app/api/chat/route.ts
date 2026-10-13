@@ -18,6 +18,14 @@ function trace(step: string, data: Record<string, unknown>): void {
 
 const messageSchema = z.object({
   message: z.string().trim().min(1).max(2000),
+  /**
+   * `service_request` while the guided request is open in the browser. The
+   * message is then an answer to a fixed question (budget, contact channel,
+   * WhatsApp number…), so only explicit human requests and complaints escalate;
+   * contact vocabulary («واتساب», «رقمي») and a recognised brief do not — the
+   * request is saved as a NEW_REQUEST alert by /api/chat/service-request.
+   */
+  intent: z.enum(["service_request"]).optional(),
 });
 
 interface BootstrapPayload {
@@ -123,12 +131,15 @@ export async function POST(request: Request) {
   // conversation flips to PENDING, the owner is emailed, and only then is the
   // client told it happened. When the write fails, the client is told that too.
   console.log("[chat] calling detectEscalation");
+  const mode = parsed.data.intent === "service_request" ? "service_request" : "conversation";
   const decision = detectEscalation({
     latestMessage: parsed.data.message,
     history: turn.messages,
     assistantReply: completion.text,
+    mode,
   });
   console.log("[chat] escalation:", {
+    mode,
     escalate: decision.escalate,
     category: decision.category,
     severity: decision.severity,

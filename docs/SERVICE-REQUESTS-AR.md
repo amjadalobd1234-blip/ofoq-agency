@@ -1,0 +1,144 @@
+# طلبات الخدمة الموجّهة — الحفظ، التنبيه، والميزانية
+
+هذا المستند يشرح ماذا يحدث عندما يُكمل العميل طلب الخدمة الموجّه في الدردشة
+(`/portal/chat?intent=service_request`)، وكيف تُقرأ الميزانية المكتوبة، ولماذا
+يُحفظ العرض بحالة `DRAFT` حاليًا.
+
+## المسار بعد الإجابة الأخيرة
+
+```
+الدردشة (assistant-chat.tsx)
+  └─ POST /api/chat/service-request  { requestId, answers, locale, conversationId }
+       └─ submitServiceRequest(input, { store: supabaseServiceRequestStore(client) })
+            ├─ prepareServiceRequestOffer()   ← التسعير + صفّ offers + ملخّص
+            ├─ RPC public.ofoq_client_service_request(...)   ← معاملة واحدة
+            │     ├─ offers         (status = DRAFT, code = OFOQ-<سنة>-NNN)
+            │     ├─ alerts         (category = NEW_REQUEST, severity = IMPORTANT)
+            │     ├─ notifications  (IN_APP لكل الفريق + EMAIL للمالك)
+            │     └─ activities     (service_request.submitted)
+            └─ Resend → بريد المالك «🔔 طلب خدمة جديد #OFOQ-…»
+```
+
+- **هذا المسار منفصل تمامًا عن التصعيد** (`ofoq_client_escalate`). التصعيد يبقى
+  لطلب شخص بشري أو الشكاوى (`HUMAN_REQUEST` / `URGENT`) ولفهم الاحتياج في
+  المحادثة الحرة (`NEW_LEAD`). طلب الخدمة المكتمل **لا يمرّ به أبدًا**.
+- أثناء الطلب الموجّه، ترسل الدردشة أي رسالة لا تطابق خيارًا إلى `/api/chat`
+  مع `intent: "service_request"`؛ عندها يتجاهل `detectEscalation` مفردات
+  التواصل («واتساب»، «رقمي…») ووعود التحويل، ولا يرفع `NEW_LEAD`. طلب شخص بشري
+  صريح أو شكوى ما زالا يصعّدان.
+- `requestId` مفتاح تكرار (idempotency): إعادة المحاولة بنفس المعرّف تُرجع نفس
+  رقم الطلب ولا تُنشئ صفًا ثانيًا (`created = false`).
+
+## التنبيه الذي يراه الفريق
+
+| الحقل | القيمة |
+| --- | --- |
+| `category` | `NEW_REQUEST` |
+| `severity` | `IMPORTANT` |
+| `title_ar` | `طلب خدمة جديد #OFOQ-2026-001` |
+| `entity_type` / `entity_id` | `conversation` + معرّف المحادثة إن وُجدت، وإلا `service_request` + معرّف العرض |
+| `dedupe_key` | `service-request:<requestId>` |
+| `target_role` | `ANY_STAFF` |
+
+أول سطر في `body_ar` هو `رقم الطلب: OFOQ-…`، ثم الخدمة والحجم والميزانية
+والمنطقة ونطاق السعر وقناة التواصل.
+
+### إذا اختار العميل واتساب
+
+يُحفظ الرقم **كما كتبه العميل** مع رابط مباشر بالصيغة الدولية:
+
+```
+قناة التواصل: واتساب
+رقم العميل: 07707048629
+رابط واتساب: https://wa.me/9647707048629
+```
+
+وفي `alert.meta`:
+
+```json
+{
+  "contact":  { "channel": "whatsapp", "value": "07707048629", "whatsappNumber": "9647707048629", "whatsappLink": "https://wa.me/9647707048629" },
+  "whatsapp": { "channel": "واتساب", "number": "07707048629", "international": "9647707048629", "link": "https://wa.me/9647707048629" }
+}
+```
+
+التطبيع في `normalizeWhatsappNumber()`: أرقام عربية → لاتينية، إزالة `+`
+و`00`، و`0…` العراقي → `964…`. الرقم في المثال أعلاه توضيحي فقط؛ يُستخدم دائمًا
+رقم العميل الفعلي. يظهر الرابط قابلًا للنقر في تفاصيل التنبيه (`/admin/alerts/<id>`)
+وفي بريد المالك.
+
+## الميزانية المكتوبة وتعديلها
+
+### الطبقات الثلاث
+
+1. **الأنماط** (`src/lib/agents/budget-parser.ts`): «من 200 إلى 500»،
+   «200-500$»، «$200-500»، «200 إلى 500»، «بين 300 و 700»، «ميزانيتي 350»،
+   «300 دولار»، «$300»، وأرقام عربية. رقم مجرّد («300») يُقبل فقط عندما يكون
+   سؤال الميزانية مفتوحًا. التواريخ وأرقام الهواتف («07707048629») لا تُعدّ ميزانية.
+2. **الذكاء الاصطناعي** (`POST /api/chat/budget-intent`، Groq أولًا): عندما تفشل
+   الأنماط — «بين المئتين والخمسمية»، «خمسمية دولار». النموذج يُرجع JSON
+   `{min, max, currency}` فقط، ويُتحقق منه ويُطبَّع في `parseBudgetAnswer()`؛
+   لا تُحفظ قيمة لم يذكرها العميل.
+3. **التطبيق**: عند سؤال الميزانية تُسجَّل الإجابة؛ وبعد الإجابة (أثناء سؤال
+   الاستهداف أو بعد الملخص) تُعدَّل الميزانية في مكانها، ويُعاد حساب التسعير
+   وتُعرض النتائج المحدّثة. السؤال المفتوح يبقى مفتوحًا.
+
+رسالة تُقرأ كميزانية **لا تُرسل إلى المساعد ولا تُعامَل كرفض** ولا تُطلب لها
+تأكيد إضافي.
+
+### التخزين
+
+| ما كتبه العميل | `answers.budget` (الفئة) | `answers.budgetRange` | `answers.budgetAmount` |
+| --- | --- | --- | --- |
+| «طيب من 200 إلى 500» | `200_500` | `200-500` | `500` |
+| «من 500 الى 200» | `200_500` | `200-500` | `500` |
+| «ميزانيتي 350» | `200_500` | `350` | `350` |
+| ضغط زر «أقل من 200$» | `under_200` | — | — |
+
+المدى يُحفظ دائمًا بالصيغة `الأدنى-الأعلى` (`200-500`) ولا يُحفظ أبدًا
+`500 من 200`. التسعير يُحسب على الحدّ الأعلى (`budgetAmount`)، وتظهر في رسالة
+التقدير عبارة «(التقدير محسوب على 500$)». في `offers.pricing_breakdown` تُسجَّل
+`budgetBand` و`budgetRange` و`budgetAmount` و`budgetSource` (`typed` / `option`).
+
+## لماذا `DRAFT` وليس `REQUESTED`؟
+
+قيد `offers_status_check` في المخطط الحالي يسمح بـ
+`DRAFT / SENT / APPROVED / REJECTED / EXPIRED / CANCELLED` فقط. لذلك:
+
+- يكتب المتجر `DRAFT` اليوم (`SERVICE_REQUEST_OFFER_STATUS`)، وتتحقق الدالة
+  `ofoq_client_service_request()` من ذلك وترفض أي حالة أخرى برسالة واضحة.
+- الهجرة `db/migrations/supabase/pending/0009_offers_requested_status.sql`
+  توسّع القيد وتُرقّي الصفوف المكتوبة. هي **غير مضمّنة** في
+  `docs/setup/supabase-setup.sql` عمدًا؛ خطوات تفعيلها مع «PR #2 (Supabase)»
+  موجودة في رأس الملف.
+
+## الفشل لا يكون صامتًا
+
+- الدالة غير مثبّتة (`PGRST202`) → `502` بكود `SERVICE_REQUEST_RPC_NOT_INSTALLED`
+  وتلميح يشير إلى `0008_service_requests.sql`.
+- رفض المخطط (مثلًا حالة غير مسموحة) → `502` بكود `SERVICE_REQUEST_SAVE_FAILED`
+  مع التلميح.
+- قاعدة البيانات غير متاحة → `SERVICE_REQUEST_RPC_UNREACHABLE`.
+
+في الدردشة تظهر «تعذر حفظ طلبك ❌» مع السبب وزر **إعادة المحاولة** (بنفس
+`requestId`). قبل وصول الردّ تظهر «⏳ جارٍ حفظ طلبك وإصدار رقم الطلب…»، وبعد
+الحفظ «رقم الطلب: OFOQ-…». إغلاق الصفحة أثناء الحفظ ثم فتحها يُعيد الإرسال
+بنفس المعرّف.
+
+## التثبيت على Supabase
+
+طبّق `docs/setup/supabase-setup.sql` في SQL Editor (يحتوي
+`0008_service_requests.sql` وتحديث `ofoq_admin_dashboard` ليعدّ `NEW_REQUEST`)،
+ثم `NOTIFY pgrst, 'reload schema';`.
+
+## الاختبارات
+
+| الملف | ما يغطيه |
+| --- | --- |
+| `tests/service-request-sql-execution.test.ts` | الدالة على PostgreSQL حقيقي (PGlite): DRAFT + `OFOQ-…`، تنبيه NEW_REQUEST/IMPORTANT، واتساب في body/meta، الإشعارات، التكرار، رفض REQUESTED |
+| `tests/service-request-offer.test.ts` | المتجر المحلي: صفّ offers، التنبيه، meta واتساب، البريد، سجل النشاط، `200-500` |
+| `tests/service-request-route.test.ts` | المسار مع عميل Supabase وهمي: RPC الصحيح فقط، لا `ofoq_client_escalate`، أخطاء واضحة |
+| `tests/budget-parser.test.ts` | الأنماط (40 حالة) |
+| `tests/budget-intent.test.ts` | طبقة الذكاء الاصطناعي مع Groq وهمي |
+| `tests/assistant-chat-budget-edit.test.tsx` | التعديل في الدردشة بالأنماط وبالذكاء الاصطناعي، إعادة التسعير، فشل الحفظ وإعادة المحاولة |
+| `tests/escalation-agent.test.ts` / `tests/chat-route-escalation.test.ts` | وضع `service_request` لا يصعّد مفردات التواصل أو الميزانية |

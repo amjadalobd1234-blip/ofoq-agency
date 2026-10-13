@@ -27,7 +27,6 @@
  */
 import type { Locale } from "@/lib/domain/types";
 import {
-  BUDGET_BANDS,
   adDaysForBudget,
   calculateServiceEstimate,
   formatCount,
@@ -38,6 +37,9 @@ import {
   type ProjectSize,
   type TargetingArea,
 } from "./pricing-agent";
+import { budgetBandForAmount, formatBudgetRange, parseBudgetRangeText, type BudgetDetail } from "./budget-parser";
+
+export type { BudgetDetail } from "./budget-parser";
 
 /* ------------------------------------------------------------------ steps --- */
 
@@ -59,7 +61,20 @@ export const SERVICE_REQUEST_STEPS: readonly ServiceRequestStep[] = [
 
 /** Every step except SUMMARY/DONE asks something (a question or a phone number). */
 export type ServiceRequestQuestionStep = "TYPE" | "SIZE" | "BUDGET" | "TARGETING" | "CONTACT";
-export type ServiceRequestAnswerKey = "type" | "size" | "budget" | "targeting" | "contact" | "phone";
+/**
+ * `budget` is always one of the four band ids. When the client typed a value
+ * or a range instead of pressing a band, `budgetRange` keeps the canonical text
+ * (`200-500` / `350`) and `budgetAmount` the planning amount (`500` / `350`).
+ */
+export type ServiceRequestAnswerKey =
+  | "type"
+  | "size"
+  | "budget"
+  | "budgetRange"
+  | "budgetAmount"
+  | "targeting"
+  | "contact"
+  | "phone";
 export type ServiceRequestAnswers = Partial<Record<ServiceRequestAnswerKey, string>>;
 
 export type ContactChannel = "whatsapp" | "email" | "website";
@@ -77,7 +92,11 @@ export interface ServiceRequestQuestion {
   options: ServiceRequestOption[];
 }
 
-/** Order reference used while the Supabase binding is deferred (PR #2). */
+/**
+ * Shape of the order reference (`OFOQ-<year>-<sequence>`). The real code is
+ * issued by the database when the request is saved; this sample is what the
+ * tests' stubbed API returns.
+ */
 export const SERVICE_REQUEST_ORDER_CODE = "OFOQ-2026-001";
 
 const TYPE_OPTIONS: ServiceRequestOption[] = [
@@ -274,6 +293,8 @@ export function optionLabel(step: ServiceRequestQuestionStep, optionId: string |
 export interface ServiceRequestAnswerEvent {
   step: ServiceRequestStep;
   answeredAt: string;
+  /** A budget changed after it was first answered («طيب من 200 إلى 500»). */
+  revision?: boolean;
 }
 
 export interface ServiceRequestState {
@@ -316,6 +337,7 @@ export function answerServiceRequest(
   state: ServiceRequestState,
   optionId: string,
   at: string = new Date().toISOString(),
+  detail: { budget?: BudgetDetail | null } = {},
 ): ServiceRequestState {
   const step = currentQuestionStep(state);
   if (!step) return state;
@@ -323,6 +345,7 @@ export function answerServiceRequest(
   if (!option) return state;
 
   const answers: ServiceRequestAnswers = { ...state.answers, [SERVICE_REQUEST_QUESTIONS[step].answerKey]: option.id };
+  if (step === "BUDGET") applyBudgetDetail(answers, option.id, detail.budget);
   const answerLog: ServiceRequestAnswerEvent[] = [...state.answerLog, { step, answeredAt: at }];
 
   if (step === "CONTACT") {
@@ -334,6 +357,59 @@ export function answerServiceRequest(
 
   const next: ServiceRequestStep = NEXT_QUESTION_STEP[step];
   return { ...state, step: next, answers, answerLog };
+}
+
+/**
+ * Stores a typed budget next to its band, or clears the typed details when a
+ * band button was pressed. The canonical text is always `min-max` (`200-500`),
+ * never the words the client used («500 من 200» is impossible here).
+ */
+function applyBudgetDetail(answers: ServiceRequestAnswers, band: string, detail: BudgetDetail | null | undefined): void {
+  const bounds = detail ? parseBudgetRangeText(detail.range) : null;
+  if (detail && bounds && Number.isFinite(detail.amount) && detail.amount > 0 && budgetBandForAmount(detail.amount) === band) {
+    answers.budgetRange = formatBudgetRange(bounds);
+    answers.budgetAmount = String(Math.round(detail.amount));
+  } else {
+    delete answers.budgetRange;
+    delete answers.budgetAmount;
+  }
+}
+
+/** Steps at which a budget already given may still be changed in the conversation. */
+const BUDGET_REVISION_STEPS: ReadonlySet<ServiceRequestStep> = new Set(["TARGETING", "SUMMARY"]);
+
+/** True when a new budget message may update the request instead of being rejected. */
+export function canReviseBudget(state: ServiceRequestState): boolean {
+  return Boolean(state.answers.budget) && BUDGET_REVISION_STEPS.has(state.step);
+}
+
+/**
+ * Updates the budget after it was answered — «طيب من 200 إلى 500» while the
+ * targeting question or the contact channel is open. The step does not move:
+ * the open question stays open, and the summary/pricing are recalculated from
+ * the new budget. Returns the state unchanged when a revision is not possible.
+ */
+export function reviseBudget(
+  state: ServiceRequestState,
+  budget: BudgetDetail,
+  at: string = new Date().toISOString(),
+): ServiceRequestState {
+  if (!canReviseBudget(state)) return state;
+  const bounds = parseBudgetRangeText(budget.range);
+  if (!bounds || !Number.isFinite(budget.amount) || budget.amount <= 0) return state;
+  const band = budgetBandForAmount(budget.amount);
+  const answers: ServiceRequestAnswers = { ...state.answers, budget: band };
+  applyBudgetDetail(answers, band, budget);
+  return {
+    ...state,
+    answers,
+    answerLog: [...state.answerLog, { step: "BUDGET", answeredAt: at, revision: true }],
+  };
+}
+
+/** The band id and planning details of a typed budget. */
+export function budgetAnswerFor(budget: BudgetDetail): { band: BudgetBand; detail: BudgetDetail } {
+  return { band: budgetBandForAmount(budget.amount), detail: budget };
 }
 
 /** WhatsApp number rules: 10–15 digits, starting with 07, +964 or 964. */
@@ -382,6 +458,9 @@ export interface ServiceRequestReplayEvent {
   step: ServiceRequestStep;
   optionId?: string;
   answeredAt: string;
+  /** Budget typed instead of pressed (first answer or a later revision). */
+  budget?: BudgetDetail | null;
+  revision?: boolean;
 }
 
 /**
@@ -394,23 +473,56 @@ export function replayServiceRequest(
   log: ServiceRequestReplayEvent[],
   answers: ServiceRequestAnswers,
 ): ServiceRequestState | null {
+  const states = replayStates(log, answers);
+  if (!states) return null;
+  const state = states.length > 0 ? states[states.length - 1]! : createServiceRequestState();
+  // The stored budget details must be the ones the log produces.
+  if ((state.answers.budgetRange ?? null) !== (answers.budgetRange ?? null)) return null;
+  if ((state.answers.budgetAmount ?? null) !== (answers.budgetAmount ?? null)) return null;
+  return state;
+}
+
+/**
+ * The state reached after each event of a valid log — what the conversation
+ * showed at that moment (the first summary with the first budget, the revised
+ * summary with the new one). `null` when the log is not valid.
+ */
+export function replayServiceRequestStates(
+  log: ServiceRequestReplayEvent[],
+  answers: ServiceRequestAnswers,
+): ServiceRequestState[] | null {
+  return replayStates(log, answers);
+}
+
+function replayStates(log: ServiceRequestReplayEvent[], answers: ServiceRequestAnswers): ServiceRequestState[] | null {
+  const states: ServiceRequestState[] = [];
   let state = createServiceRequestState();
   for (const event of log) {
     if (event.step === "PHONE") {
       const attempt = submitWhatsappNumber(state, answers.phone ?? "", event.answeredAt);
       if (attempt.error) return null;
       state = attempt.state;
+      states.push(state);
+      continue;
+    }
+    if (event.step === "BUDGET" && event.revision) {
+      if (!event.budget || !canReviseBudget(state)) return null;
+      const revised = reviseBudget(state, event.budget, event.answeredAt);
+      if (revised === state) return null;
+      state = revised;
+      states.push(state);
       continue;
     }
     const question = SERVICE_REQUEST_QUESTIONS[event.step as ServiceRequestQuestionStep];
     if (!question || !event.optionId) return null;
     if (currentQuestionStep(state) !== event.step) return null;
     const before = state.step;
-    state = answerServiceRequest(state, event.optionId, event.answeredAt);
+    state = answerServiceRequest(state, event.optionId, event.answeredAt, { budget: event.budget ?? null });
     if (state.step === before) return null;
     if (state.answers[question.answerKey] !== event.optionId) return null;
+    states.push(state);
   }
-  return state;
+  return states;
 }
 
 /** True once a contact channel was chosen (and, for WhatsApp, the number saved). */
@@ -420,22 +532,77 @@ export function isServiceRequestSubmitted(answers: ServiceRequestAnswers): boole
   return answers.contact === "email" || answers.contact === "website";
 }
 
-/** The pricing agent's input, built only from values the questions offered. */
+/**
+ * The pricing agent's input, built only from values the questions offered —
+ * plus the exact planning amount when the budget was typed (the upper bound of
+ * «من 200 إلى 500», or the single value), which must fall inside the stored band.
+ */
 export function requestPricingInput(answers: ServiceRequestAnswers): PricingInput {
   const budget: BudgetBand = isBudgetBand(answers.budget) ? answers.budget : "under_200";
   const targeting = SERVICE_REQUEST_QUESTIONS.TARGETING.options.some((option) => option.id === answers.targeting)
     ? (answers.targeting as TargetingArea)
     : "iraq_all";
+  const typed = typedBudget(answers);
   return {
     type: SERVICE_TYPE_BY_OPTION[answers.type ?? "other"] ?? "other",
     size: answers.size === "small" || answers.size === "large" ? answers.size : "medium",
     budget,
     targeting,
+    budgetAmount: typed?.amount ?? null,
   };
 }
 
 function isBudgetBand(value: string | undefined): value is BudgetBand {
   return value === "under_200" || value === "200_500" || value === "500_1500" || value === "over_1500";
+}
+
+/**
+ * The typed budget of the request (`{ range: "200-500", amount: 500 }`), or
+ * `null` when a band button was pressed or the stored details are inconsistent
+ * (amount outside its band, range that does not parse).
+ */
+export function typedBudget(answers: ServiceRequestAnswers): (BudgetDetail & { min: number; max: number }) | null {
+  if (!isBudgetBand(answers.budget)) return null;
+  const bounds = parseBudgetRangeText(answers.budgetRange);
+  const amount = Number(answers.budgetAmount);
+  if (!bounds || !Number.isFinite(amount) || amount <= 0) return null;
+  if (budgetBandForAmount(amount) !== answers.budget) return null;
+  if (amount !== bounds.max) return null;
+  return { range: formatBudgetRange(bounds), amount, min: bounds.min, max: bounds.max };
+}
+
+/**
+ * The budget as the client sees it: the typed range («200-500$» / «350$») or
+ * the label of the band they pressed («أقل من 200$», «200-500$»). The stored
+ * order is always smallest first — «500 من 200» cannot be produced.
+ */
+export function budgetDisplayText(answers: ServiceRequestAnswers, locale: Locale): string {
+  const typed = typedBudget(answers);
+  if (typed) {
+    return typed.min === typed.max
+      ? `${formatCount(typed.max, locale)}$`
+      : `${formatCount(typed.min, locale)}-${formatCount(typed.max, locale)}$`;
+  }
+  if (isBudgetBand(answers.budget)) return optionLabel("BUDGET", answers.budget, locale);
+  return "";
+}
+
+/** Canonical budget text for records and alerts (`200-500`, `350`, or the band's range). */
+export function budgetRecordText(answers: ServiceRequestAnswers): string {
+  const typed = typedBudget(answers);
+  if (typed) return typed.range;
+  switch (answers.budget) {
+    case "under_200":
+      return "<200";
+    case "200_500":
+      return "200-500";
+    case "500_1500":
+      return "500-1500";
+    case "over_1500":
+      return ">1500";
+    default:
+      return "";
+  }
 }
 
 export function platformsForAnswers(answers: ServiceRequestAnswers): PlatformScope {
@@ -457,20 +624,42 @@ export function contactChannelLines(locale: Locale, email?: string | null): stri
 }
 
 /** The summary shown right after the four basic questions. */
-export function serviceRequestSummary(answers: ServiceRequestAnswers, locale: Locale): string {
+export function serviceRequestSummary(
+  answers: ServiceRequestAnswers,
+  locale: Locale,
+  options: { revised?: boolean } = {},
+): string {
   const ar = locale === "ar";
-  const budget = isBudgetBand(answers.budget) ? BUDGET_BANDS[answers.budget].max : null;
   const lines = [
-    ar ? "تمام، فهمت طلبك 👌" : "Great, I've got your request 👌",
+    options.revised
+      ? ar
+        ? `تمام، حدّثت الميزانية إلى ${budgetDisplayText(answers, locale)} ✅ وهذا طلبك بعد التعديل:`
+        : `Done, I updated the budget to ${budgetDisplayText(answers, locale)} ✅ here is your revised request:`
+      : ar
+        ? "تمام، فهمت طلبك 👌"
+        : "Great, I've got your request 👌",
     "",
     `${ar ? "- الخدمة" : "- Service"}: ${optionLabel("TYPE", answers.type, locale)}`,
     `${ar ? "- الحجم" : "- Size"}: ${optionLabel("SIZE", answers.size, locale)}`,
-    `${ar ? "- الميزانية" : "- Budget"}: ${budget === null ? "" : `${formatCount(budget, locale)}$`}`,
+    `${ar ? "- الميزانية" : "- Budget"}: ${budgetDisplayText(answers, locale)}`,
     `${ar ? "- المنطقة المستهدفة" : "- Target area"}: ${optionLabel("TARGETING", answers.targeting, locale)}`,
     "",
-    ar ? "خليني أحسب لك تقديراً واضحاً..." : "Let me prepare a clear estimate...",
+    options.revised
+      ? ar
+        ? "خليني أعيد حساب التقدير على الميزانية الجديدة..."
+        : "Let me recalculate the estimate for the new budget..."
+      : ar
+        ? "خليني أحسب لك تقديراً واضحاً..."
+        : "Let me prepare a clear estimate...",
   ];
   return lines.join("\n");
+}
+
+/** Acknowledges a budget change made before the targeting question was answered. */
+export function budgetUpdatedMessage(answers: ServiceRequestAnswers, locale: Locale): string {
+  return locale === "ar"
+    ? `تمام، حدّثت الميزانية إلى ${budgetDisplayText(answers, locale)} ✅`
+    : `Done, I updated the budget to ${budgetDisplayText(answers, locale)} ✅`;
 }
 
 /**
@@ -493,8 +682,13 @@ export function serviceRequestEstimate(
     const reach = result.expectedReach ?? [0, 0];
     const visits = result.expectedVisits ?? [0, 0];
     const leads = result.expectedLeads ?? [0, 0];
+    const typed = typedBudget(answers);
+    const budgetLine =
+      typed && typed.min !== typed.max
+        ? `${ar ? "ميزانيتك" : "Your budget"}: ${budgetDisplayText(answers, locale)} ${result.budgetEmoji} ${ar ? `(التقدير محسوب على ${formatCount(result.budgetAmount, locale)}$)` : `(estimate based on ${formatCount(result.budgetAmount, locale)}$)`}`
+        : `${ar ? "ميزانيتك" : "Your budget"}: ${formatCount(result.budgetAmount, locale)}$ ${result.budgetEmoji}`;
     return [
-      `${ar ? "ميزانيتك" : "Your budget"}: ${formatCount(result.budgetAmount, locale)}$ ${result.budgetEmoji}`,
+      budgetLine,
       "",
       `💡 ${ar ? "تغطي" : "Covers"} ${result.estimatedAdDays} ${ar ? "يوم إعلان فعّال" : "active ad days"}`,
       "",
@@ -540,39 +734,71 @@ export function whatsappNumberPrompt(locale: Locale): string {
     : "Send me your WhatsApp number so the Ofoq team can reach you (starting with 07 or +964).";
 }
 
-/** Confirmation of the chosen channel, with the temporary order reference. */
+/** What the server did with the completed request, as the confirmation shows it. */
+export interface ServiceRequestSubmissionStatus {
+  status: "pending" | "saved" | "failed";
+  /** The order reference issued by the database once the request is saved. */
+  orderCode?: string | null;
+  /** Clear reason shown to the client when saving failed. */
+  error?: string | null;
+}
+
+export const SERVICE_REQUEST_SAVE_FAILED: Record<Locale, string> = {
+  ar: "تعذر حفظ طلبك ❌",
+  en: "Your request could not be saved ❌",
+};
+
+/**
+ * Confirmation of the chosen channel. The order reference is the one the
+ * database issued; while the save is in flight the client sees that it is in
+ * progress, and a failure is stated plainly (never a silent success).
+ */
 export function serviceRequestConfirmation(
   answers: ServiceRequestAnswers,
   locale: Locale,
-  options: { email?: string | null } = {},
+  options: { email?: string | null; submission?: ServiceRequestSubmissionStatus | null } = {},
 ): string {
   const ar = locale === "ar";
-  const order = `${ar ? "رقم الطلب" : "Order reference"}: ${SERVICE_REQUEST_ORDER_CODE}`;
+  const submission: ServiceRequestSubmissionStatus = options.submission ?? { status: "pending" };
   const address = options.email?.trim() || (ar ? "البريد المسجّل بحسابك" : "the address registered to your account");
 
+  const statusLines: string[] =
+    submission.status === "saved"
+      ? [`${ar ? "رقم الطلب" : "Order reference"}: ${submission.orderCode?.trim() || SERVICE_REQUEST_ORDER_CODE}`]
+      : submission.status === "failed"
+        ? [
+            SERVICE_REQUEST_SAVE_FAILED[locale],
+            ...(submission.error?.trim() ? [submission.error.trim()] : []),
+            ar
+              ? "اضغط «إعادة المحاولة» أو تواصل معنا مباشرة، ولا تحتاج تعيد الإجابات."
+              : "Press “Try again” or contact us directly; you do not need to answer again.",
+          ]
+        : [ar ? "⏳ جارٍ حفظ طلبك وإصدار رقم الطلب…" : "⏳ Saving your request and issuing the order reference…"];
+
+  const saved = submission.status !== "failed";
   if (answers.contact === "whatsapp") {
     return [
-      ar ? "تم حفظ رقمك ✅" : "Your number was saved ✅",
+      saved ? (ar ? "تم حفظ رقمك ✅" : "Your number was saved ✅") : ar ? "استلمت رقمك" : "I have your number",
       ar ? `سيتواصل معك فريق أفق عبر واتساب على الرقم: ${answers.phone ?? ""}` : `The Ofoq team will contact you on WhatsApp at: ${answers.phone ?? ""}`,
       "",
-      order,
+      ...statusLines,
     ].join("\n");
   }
 
   if (answers.contact === "website") {
     return [
-      ar ? "تم حفظ طلبك ✅" : "Your request was saved ✅",
+      saved ? (ar ? "تم حفظ طلبك ✅" : "Your request was saved ✅") : ar ? "استلمت طلبك" : "I have your request",
       ar ? "ستستلم إشعاراً في الموقع عند التواصل معك." : "You will receive an in-app notification when we reach out.",
       "",
-      order,
+      ...statusLines,
     ].join("\n");
   }
 
   return [
-    ar ? "تم حفظ طلبك ✅" : "Your request was saved ✅",
+    saved ? (ar ? "تم حفظ طلبك ✅" : "Your request was saved ✅") : ar ? "استلمت طلبك" : "I have your request",
     ar ? `سيتواصل معك فريق أفق على البريد المسجل: ${address}` : `The Ofoq team will contact you at the registered address: ${address}`,
     "",
-    order,
+    ...statusLines,
   ].join("\n");
 }
 
@@ -580,7 +806,7 @@ export function serviceRequestConfirmation(
 export function serviceRequestOneLineSummary(answers: ServiceRequestAnswers, locale: Locale): string {
   const result = calculateServiceEstimate(requestPricingInput(answers));
   const ar = locale === "ar";
-  const budget = `${formatCount(result.budgetAmount, locale)}$`;
+  const budget = budgetDisplayText(answers, locale) || `${formatCount(result.budgetAmount, locale)}$`;
   const price =
     result.minPrice === null || result.maxPrice === null
       ? ar
