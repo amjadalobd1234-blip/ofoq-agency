@@ -1929,6 +1929,7 @@ button:disabled {
 .chat-encrypted { display: flex; align-items: center; gap: 4px; margin-inline-start: auto; color: #8d887c; font-size: 9px; white-space: nowrap; }
 .chat-encrypted span { color: var(--gold); }
 .chat-provider-note,
+.chat-service-cta { display: flex; justify-content: flex-end; padding: 12px 16px 0; }
 .chat-context-note { margin: 10px 13px 0; border: 1px solid rgba(212, 175, 55, 0.13); border-radius: 3px; background: rgba(212, 175, 55, 0.035); padding: 8px 10px; color: #918c7f; font-size: 10px; line-height: 1.65; }
 .chat-provider-note { display: flex; align-items: flex-start; gap: 7px; }
 .chat-provider-note > span { display: inline-grid; width: 15px; height: 15px; flex: 0 0 auto; place-items: center; border: 1px solid rgba(245, 215, 110, 0.4); border-radius: 50%; color: var(--gold-light); font-family: var(--font-latin); font-size: 9px; }

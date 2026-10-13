@@ -635,6 +635,15 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
           <span className="chat-encrypted"><span>◇</span>{ar ? "محادثة خاصة" : "Private chat"}</span>
         </div>
 
+        {!loading && (() => {
+          // A conversation the client has already written in → "new service";
+          // a fresh one (only the assistant greeting) → "start a service request".
+          const hasConversation = messages.some((message) => message.sender === "CLIENT");
+          const label = hasConversation ? (ar ? "اطلب خدمة جديدة" : "Request a new service") : (ar ? "ابدأ طلب خدمة" : "Start a service request");
+          return <div className="chat-service-cta">
+            <a className="button button-gold" href="/chat?intent=service_request"><span>{label}</span><span className="button-arrow" aria-hidden="true">↗</span></a>
+          </div>;
+        })()}
         {intent === "service_request" && <div className="chat-context-note">{ar ? "راح نسألك أربع أسئلة سريعة حتى نفهم مشروعك ونحسب تقديراً واضحاً." : "Four quick questions so we can understand your business and give a clear estimate."}</div>}
         {ready && <div className="chat-provider-note"><span>i</span>{providerAvailable ? (ar ? "المساعد متصل بمزودي الذكاء الاصطناعي (Groq، Gemini، Cohere وغيرها). قد تُرسل رسائل المحادثة إلى المزود لتوليد الرد، ونعود إلى الردود المحلية إذا تعذّرت الخدمة. لا تشارك كلمات مرور أو بيانات دفع." : "The assistant is connected to AI providers (Groq, Gemini, Cohere and others). Conversation messages may be sent to a provider for generation, with local replies as a fallback. Do not share passwords or payment details.") : copy.providerOff}</div>}
         {escalated && <div className="chat-escalation-note" role="status"><span>✔</span>{ar ? "تم تحويل محادثتك إلى فريق أفق البشري: أُنشئ تنبيه في لوحة الوكالة وتم إشعار المالك. سيتواصل معك أحد أعضاء الفريق." : "Your conversation has been handed over to the Ofoq human team: an alert was created in the agency control room and the owner was notified. A team member will contact you."}</div>}
