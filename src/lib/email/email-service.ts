@@ -204,6 +204,25 @@ interface LayoutInput {
   locale: Locale;
 }
 
+/**
+ * Escapes a fact value and turns any `http(s)://` URL in it into a link — the
+ * owner's service-request email carries the client's wa.me link, which must be
+ * tappable from the inbox.
+ */
+function linkifyHtml(value: string): string {
+  const pattern = /https?:\/\/[^\s<>"'،]+/g;
+  let html = "";
+  let last = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(value)) !== null) {
+    html += escapeHtml(value.slice(last, match.index));
+    const url = escapeHtml(match[0]);
+    html += `<a href="${url}" dir="ltr" style="color:#d4af37;">${url}</a>`;
+    last = match.index + match[0].length;
+  }
+  return html + escapeHtml(value.slice(last));
+}
+
 /** Shared shell so every message looks like it came from the same agency. */
 function renderLayout(input: LayoutInput): string {
   const dir = input.locale === "ar" ? "rtl" : "ltr";
@@ -212,7 +231,7 @@ function renderLayout(input: LayoutInput): string {
     .map(
       ([label, value]) =>
         `<tr><td style="padding:6px 0;color:#8d8878;font-size:12px;">${escapeHtml(label)}</td>` +
-        `<td style="padding:6px 0;color:#f2efe6;font-size:13px;font-weight:600;text-align:${align};">${escapeHtml(value)}</td></tr>`,
+        `<td style="padding:6px 0;color:#f2efe6;font-size:13px;font-weight:600;text-align:${align};">${linkifyHtml(value)}</td></tr>`,
     )
     .join("");
   const action = input.action

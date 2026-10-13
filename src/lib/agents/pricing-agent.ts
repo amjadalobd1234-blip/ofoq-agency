@@ -72,6 +72,13 @@ export interface PricingInput {
   size: ProjectSize;
   budget: BudgetBand;
   targeting: TargetingArea;
+  /**
+   * Exact planning amount in USD when the client typed a value or a range
+   * («من 200 إلى 500» → 500) instead of pressing a band button. Overrides the
+   * band's published upper bound in every calculation; the band still decides
+   * the quality label and emoji.
+   */
+  budgetAmount?: number | null;
 }
 
 export interface BudgetBandInfo {
@@ -239,8 +246,12 @@ export function estimateAdsPerformance(budgetAmount: number, targeting: Targetin
 /** Deterministic quote and performance estimate. */
 export function calculateServiceEstimate(input: PricingInput): PricingResult {
   const budget = BUDGET_BANDS[input.budget];
+  const budgetAmount =
+    typeof input.budgetAmount === "number" && Number.isFinite(input.budgetAmount) && input.budgetAmount > 0
+      ? Math.round(input.budgetAmount)
+      : budget.max;
   const price = input.type === "other" ? null : SERVICES[input.type];
-  const platforms = platformScopeForBudget(budget.max);
+  const platforms = platformScopeForBudget(budgetAmount);
   const multiplier = PRICE_MULTIPLIERS.size[input.size] * PRICE_MULTIPLIERS.platforms[platforms];
   const minPrice = price ? roundDollar(price.min * multiplier) : null;
   const maxPrice = price ? roundDollar(price.max * multiplier) : null;
@@ -248,13 +259,13 @@ export function calculateServiceEstimate(input: PricingInput): PricingResult {
   // Only paid ads have expected performance numbers.
   const hasAdResults = input.type === "ads";
   const performance = hasAdResults
-    ? estimateAdsPerformance(budget.max, input.targeting)
+    ? estimateAdsPerformance(budgetAmount, input.targeting)
     : { impressions: null, visits: null, leads: null };
 
   return {
     service: input.type,
     budgetBand: input.budget,
-    budgetAmount: budget.max,
+    budgetAmount,
     budgetQuality: budget.quality,
     budgetLabel: budget.labelAr,
     budgetEmoji: budget.emoji,
@@ -267,7 +278,7 @@ export function calculateServiceEstimate(input: PricingInput): PricingResult {
     expectedVisits: performance.visits,
     expectedLeads: performance.leads,
     targeting: input.targeting,
-    estimatedAdDays: hasAdResults ? adDaysForBudget(budget.max) : null,
+    estimatedAdDays: hasAdResults ? adDaysForBudget(budgetAmount) : null,
   };
 }
 

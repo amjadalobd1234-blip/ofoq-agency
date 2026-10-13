@@ -123,6 +123,7 @@ function categoryLabel(category: string, locale: Locale): string {
   const labels: Record<string, [string, string]> = {
     HUMAN_REQUEST: ["طلب فريق بشري", "Human handoff"],
     NEW_LEAD: ["طلب جديد", "New lead"],
+    NEW_REQUEST: ["طلب خدمة جديد", "New service request"],
     escalation: ["تصعيد", "Escalation"],
     support: ["دعم", "Support"],
     sales: ["مبيعات", "Sales"],

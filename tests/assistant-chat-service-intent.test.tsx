@@ -94,9 +94,11 @@ describe("chat opened from «اطلب خدمة جديدة» (?intent=service_req
     await waitFor(() => expect(shownBodies()).toContain(REPLY));
     expect(shownBodies().at(-1)).toContain(CLARIFICATION_START);
     expect(storedContext()).toMatchObject({ step: "TYPE", answers: {} });
-    // The welcome is displayed only; the API was asked to save the client's message alone.
+    // The welcome is displayed only; the API was asked to save the client's
+    // message alone, flagged as part of the guided request so contact words are
+    // not mistaken for a human handoff.
     const post = vi.mocked(fetch).mock.calls.find(([url, init]) => init?.method === "POST" && String(url).endsWith("/api/chat"));
-    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ message: FREE_TEXT });
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ message: FREE_TEXT, intent: "service_request" });
 
     // Refresh: the page loads again with the same URL and the answer is now saved history.
     cleanup();

@@ -10,8 +10,8 @@ import { dictionaries } from "@/lib/i18n/dictionaries";
 const NEW_OFFER_STATUSES = ["DRAFT", "SENT"];
 /** Project statuses that count as active. Must match the RPC's `activeProjects` count. */
 const ACTIVE_PROJECT_STATUSES = ["PLANNING", "IN_PROGRESS", "IN_REVIEW", "REVISIONS"];
-/** Escalation categories raised by the assistant when a human is needed. */
-const LEAD_CATEGORIES = ["NEW_LEAD", "HUMAN_REQUEST"];
+/** Alert categories the assistant raises for the team: human handoffs, understood briefs, guided service requests. */
+const LEAD_CATEGORIES = ["NEW_LEAD", "HUMAN_REQUEST", "NEW_REQUEST"];
 type AdminTab = "overview" | "clients" | "requests" | "projects" | "campaigns" | "reports" | "alerts" | "agents";
 
 const ADMIN_TABS: Array<{ id: AdminTab; ar: string; en: string }> = [
@@ -117,7 +117,7 @@ export function AdminDashboard({ locale }: { locale: Locale }) {
           <div className="card-heading-row"><div><span className="eyebrow">02 / {ar ? "الطلبات" : "Requests"}</span><h2>{ar ? "الطلبات الجديدة" : "New requests"}</h2><p className="card-subtitle">{ar ? "طلبات تواصل رفعها مساعد أفق + عروض بانتظار المتابعة." : "Contact requests raised by the Ofoq assistant, plus offers awaiting follow-up."}</p></div><span className="mini-count">{data.totals.newRequests + newLeadCount}</span></div>
           {leadRequests.length === 0 && newOffers.length === 0 ? <EmptyAdmin text={ar ? "لا توجد طلبات جديدة: لا تنبيهات تواصل من المساعد ولا عروض بحالة مسودة أو مُرسلة." : "No new requests: no assistant handoff alerts and no offers in draft or sent status."} /> : (
             <div className="compact-list">
-              {leadRequests.map((lead) => <a className="alert-row alert-row-link" href={`/admin/alerts/${encodeURIComponent(lead.id)}`} key={lead.id}><span className={`severity-dot severity-${lead.severity.toLowerCase()}`} /><div className="compact-row-copy"><strong>{lead.customerName || (ar ? lead.titleAr : lead.titleEn)}</strong><span>{ar ? lead.bodyAr : lead.bodyEn}</span><span className="alert-meta">{lead.category === "HUMAN_REQUEST" ? (ar ? "طلب فريق بشري" : "Human handoff") : (ar ? "طلب جديد" : "New lead")}{lead.customerEmail ? ` · ${lead.customerEmail}` : ""} · {formatDate(lead.createdAt, locale)}</span></div><div className="compact-row-side"><span className="status-pill status-new">{ar ? "بانتظار الفريق" : "Awaiting team"}</span><time>{lead.conversationId ? `#${lead.conversationId.slice(0, 8)}` : ""}</time></div><span className="alert-row-open" aria-hidden="true">←</span></a>)}
+              {leadRequests.map((lead) => <a className="alert-row alert-row-link" href={`/admin/alerts/${encodeURIComponent(lead.id)}`} key={lead.id}><span className={`severity-dot severity-${lead.severity.toLowerCase()}`} /><div className="compact-row-copy"><strong>{lead.customerName || (ar ? lead.titleAr : lead.titleEn)}</strong><span>{ar ? lead.bodyAr : lead.bodyEn}</span><span className="alert-meta">{alertCategoryLabel(lead.category, locale)}{lead.customerEmail ? ` · ${lead.customerEmail}` : ""} · {formatDate(lead.createdAt, locale)}</span></div><div className="compact-row-side"><span className="status-pill status-new">{ar ? "بانتظار الفريق" : "Awaiting team"}</span><time>{lead.conversationId ? `#${lead.conversationId.slice(0, 8)}` : ""}</time></div><span className="alert-row-open" aria-hidden="true">←</span></a>)}
               {newOffers.map((item) => <article className="compact-row" key={item.id}><div className="compact-row-copy"><strong>{item.code} · {item.customerName}</strong><span>{item.createdByAgent ? `${ar ? "أنشأه وكيل" : "Created by agent"}: ${item.createdByAgent}` : item.customerEmail || item.status}</span></div><div className="compact-row-side"><strong>{formatMoney(item.totalMinor, item.currency, locale)}</strong><StatusLabel status={item.status} locale={locale} /></div></article>)}
             </div>
           )}
@@ -176,6 +176,7 @@ function alertCategoryLabel(category: string | undefined, locale: Locale): strin
   const labels: Record<string, [string, string]> = {
     HUMAN_REQUEST: ["طلب فريق بشري", "Human handoff"],
     NEW_LEAD: ["طلب جديد", "New lead"],
+    NEW_REQUEST: ["طلب خدمة جديد", "New service request"],
     escalation: ["تصعيد", "Escalation"],
     support: ["دعم", "Support"],
     sales: ["مبيعات", "Sales"],

@@ -280,6 +280,36 @@ describe("POST /api/chat escalation", () => {
     expect(calls.filter((call) => call.fn === "ofoq_client_escalate")).toHaveLength(0);
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
+
+  it("does not hand over contact words or a budget typed inside the guided service request", async () => {
+    // The chat flags the message with `intent: "service_request"` while the
+    // guided request is open. «واتساب» is then the answer to "how should we
+    // contact you?", and «طيب من 200 إلى 500» a budget change — neither is a
+    // request for a human, and the completed request is saved as a
+    // NEW_REQUEST alert by /api/chat/service-request, never by this route.
+    for (const message of ["واتساب ورقمي 07707048629", "طيب من 200 إلى 500"]) {
+      calls.length = 0;
+      latestMessage = message;
+      const response = await POST(
+        new Request("http://localhost/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message, intent: "service_request" }),
+        }),
+      );
+      const payload = (await response.json()) as { data: { escalated: boolean; escalation: unknown } };
+      expect(response.status).toBe(200);
+      expect(payload.data.escalated).toBe(false);
+      expect(payload.data.escalation).toBeNull();
+      expect(calls.filter((call) => call.fn === "ofoq_client_escalate")).toHaveLength(0);
+    }
+
+    // Without the flag the same contact words are a handoff, as before.
+    calls.length = 0;
+    const free = await POST(postRequest("كلمني على الواتساب"));
+    expect(((await free.json()) as { data: { escalated: boolean } }).data.escalated).toBe(true);
+    expect(calls.find((call) => call.fn === "ofoq_client_escalate")?.args).toMatchObject({ p_category: "HUMAN_REQUEST", p_severity: "URGENT" });
+  });
 });
 
 describe("GET /api/chat", () => {

@@ -132,3 +132,55 @@ describe("what the client is told", () => {
     expect(handoffNotice("en", "failed")).not.toContain("handed over");
   });
 });
+
+describe("inside the guided service request (mode: service_request)", () => {
+  /**
+   * The guided request asks the client to choose WhatsApp and type a number,
+   * and a typed budget may miss the patterns and reach the assistant. None of
+   * that is a request for a human: the request itself is saved as a
+   * NEW_REQUEST / IMPORTANT alert by its own path (`ofoq_client_service_request`),
+   * so the escalation agent must stay silent for contact vocabulary, budgets
+   * and complete briefs — and still react to an explicit human request.
+   */
+  it.each([
+    "واتساب",
+    "رقمي 07707048629",
+    "كلمني على الواتساب",
+    "طيب من 200 إلى 500",
+    "ميزانيتي 350 دولار",
+    "إعلانات انستغرام بميزانية 500 دولار للعراق كله",
+  ])("does not escalate «%s»", (message) => {
+    const decision = detectEscalation({ latestMessage: message, mode: "service_request" });
+    expect(decision.escalate).toBe(false);
+    expect(decision.category).toBeNull();
+    expect(decision.signals).toContain("guided_service_request");
+  });
+
+  it("ignores a reply that sounds like a handoff promise while the request is guided", () => {
+    const decision = detectEscalation({
+      latestMessage: "تمام",
+      assistantReply: "سيتم تحويل طلبك إلى الفريق المختص",
+      mode: "service_request",
+    });
+    expect(decision.escalate).toBe(false);
+    // The same reply escalates in a free conversation.
+    expect(detectEscalation({ latestMessage: "تمام", assistantReply: "سيتم تحويل طلبك إلى الفريق المختص" }).escalate).toBe(true);
+  });
+
+  it("still escalates an explicit human request or a complaint", () => {
+    expect(detectEscalation({ latestMessage: "أريد أتكلم مع شخص بشري", mode: "service_request" })).toMatchObject({
+      escalate: true,
+      category: "HUMAN_REQUEST",
+      severity: "URGENT",
+    });
+    expect(detectEscalation({ latestMessage: "هذه شكوى، أنا غير راضي", mode: "service_request" })).toMatchObject({
+      escalate: true,
+      category: "HUMAN_REQUEST",
+    });
+  });
+
+  it("keeps the contact vocabulary as a handoff in a free conversation", () => {
+    expect(detectEscalation({ latestMessage: "كلمني على الواتساب" })).toMatchObject({ escalate: true, category: "HUMAN_REQUEST" });
+    expect(detectEscalation({ latestMessage: "كلمني على الواتساب", mode: "conversation" })).toMatchObject({ escalate: true });
+  });
+});

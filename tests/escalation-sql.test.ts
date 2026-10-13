@@ -245,14 +245,15 @@ describe("admin dashboard reads the escalation alerts", () => {
       "'urgentAlerts', (SELECT count(*) FROM public.alerts WHERE severity IN ('URGENT', 'IMPORTANT')",
     );
     expect(portalSql).toContain("'criticalAlerts'");
+    // Guided service requests (NEW_REQUEST, migration 0008) count as new requests too.
     expect(portalSql).toContain(
-      "'newLeads', (SELECT count(*) FROM public.alerts WHERE category IN ('NEW_LEAD', 'HUMAN_REQUEST')",
+      "'newLeads', (SELECT count(*) FROM public.alerts WHERE category IN ('NEW_LEAD', 'HUMAN_REQUEST', 'NEW_REQUEST')",
     );
   });
 
   it("returns the new-request list and the client behind each alert", () => {
     expect(portalSql).toContain("'leadRequests', v_leads");
-    expect(portalSql).toContain("category IN ('NEW_LEAD', 'HUMAN_REQUEST') AND status IN ('NEW', 'ACKNOWLEDGED')");
+    expect(portalSql).toContain("category IN ('NEW_LEAD', 'HUMAN_REQUEST', 'NEW_REQUEST') AND status IN ('NEW', 'ACKNOWLEDGED')");
     expect(portalSql).toContain("'customerName', c.contact_name");
     // The manual bundle the owner applies must carry the same definition.
     expect(setupSql).toContain("'leadRequests', v_leads");

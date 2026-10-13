@@ -209,7 +209,8 @@ describe("pricing agent — the four basic questions, budget-derived scope and h
     const summary = serviceRequestSummary({ type: "ads", size: "medium", budget: "under_200", targeting: "iraq_all" }, "ar");
     expect(summary).toContain("- الخدمة: إعلانات");
     expect(summary).toContain("- الحجم: متوسط");
-    expect(summary).toContain("- الميزانية: 200$");
+    // A pressed band is summarised with its own label, never a bare band maximum.
+    expect(summary).toContain("- الميزانية: أقل من 200$");
     expect(summary).toContain("- المنطقة المستهدفة: 🇮🇶 العراق كله");
   });
 

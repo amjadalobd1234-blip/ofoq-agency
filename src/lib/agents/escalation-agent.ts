@@ -64,7 +64,7 @@ export const ESCALATION_CATEGORY_LABELS: Record<EscalationCategory, { ar: string
 /* -------------------------------------------------------------------------- */
 
 /** "I want a real person" — Arabic (MSA + Iraqi/Gulf), and English. */
-const HUMAN_REQUEST_PATTERNS: RegExp[] = [
+const EXPLICIT_HUMAN_PATTERNS: RegExp[] = [
   /(بشري|بشرية|إنسان|انسان|شخص حقيقي|شخصية حقيقية|موظف|موظفة|فريق بشري)/,
   // "أريد بشر" / "ابغى بشر" / "البشر": the bare word "بشر" as a whole word.
   // \b does not work for Arabic in JavaScript, so the boundaries are explicit.
@@ -73,10 +73,21 @@ const HUMAN_REQUEST_PATTERNS: RegExp[] = [
   /(التحدث|أتحدث|اتحدث|تحدث|أتكلم|اتكلم|أكلم|اكلم|كلم|الكلام)\s+(مع|إلى|الى)\s+(شخص|أحد|احد|موظف|موظفة|مسؤول|الفريق|فريق|أحد من الفريق)/,
   /(أريد|اريد|ابي|أبي|ابغى|أبغى|ابغي|أبغي|ودي|أودّ|اود)\s+(شخص|أحد|احد|موظف|مسؤول)(?=$|[\s،,.!?؟])/,
   /(أتكلم|اتكلم|أحچي|احچي|أتحدث|اتحدث|أكلم|اكلم|أريد أحد|اريد احد|ابي واحد)/,
-  /(كلمني|اتصل بي|اتصلو بي|رقمكم|رقم الهاتف|واتس|واتساب|whatsapp)/,
   /\b(human|real person|someone|somebody|agent|representative|manager|staff)\b/,
-  /\b(call me|phone me|talk to|speak (to|with)|contact me|reach me)\b/,
+  /\b(talk to|speak (to|with))\b/,
 ];
+
+/**
+ * «Call me / WhatsApp me» — a human request in a free conversation, but plain
+ * vocabulary inside the guided service request, where the client is asked to
+ * choose WhatsApp and type a number. Kept apart so that mode can skip them.
+ */
+const CONTACT_VOCABULARY_PATTERNS: RegExp[] = [
+  /(كلمني|اتصل بي|اتصلو بي|رقمكم|رقم الهاتف|واتس|واتساب|whatsapp)/,
+  /\b(call me|phone me|contact me|reach me)\b/,
+];
+
+const HUMAN_REQUEST_PATTERNS: RegExp[] = [...EXPLICIT_HUMAN_PATTERNS, ...CONTACT_VOCABULARY_PATTERNS];
 
 /** Dissatisfaction always needs a person, never another automated answer. */
 const COMPLAINT_PATTERNS: RegExp[] = [
@@ -99,6 +110,8 @@ const HANDOFF_CLAIM_PATTERNS: RegExp[] = [
 const SMALL_TALK_PATTERN =
   /^(hi|hello|hey|ok|okay|thanks|thank you|مرحبا|مرحبًا|السلام عليكم|اهلا|أهلًا|هاي|شكرا|شكرًا|تمام|نعم|لا)[\s!.،؟?]*$/i;
 
+export type EscalationMode = "conversation" | "service_request";
+
 export interface DetectEscalationInput {
   /** The client message that triggered this turn. */
   latestMessage: string;
@@ -106,6 +119,15 @@ export interface DetectEscalationInput {
   history?: EscalationTurn[];
   /** The assistant reply about to be saved, used to honour its own promises. */
   assistantReply?: string | null;
+  /**
+   * `service_request` while the guided request is open: the client is answering
+   * fixed questions (budget, contact channel, WhatsApp number), so contact
+   * vocabulary, a recognised brief (NEW_LEAD) and a reply that "promises a
+   * handoff" are NOT escalations — the request itself is saved as a
+   * NEW_REQUEST alert by its own path. Explicit human requests and complaints
+   * still escalate.
+   */
+  mode?: EscalationMode;
 }
 
 /**
@@ -119,14 +141,16 @@ export function detectEscalation(input: DetectEscalationInput): EscalationDecisi
   const lower = latest.toLowerCase();
   const reply = (input.assistantReply ?? "").trim();
   const signals: string[] = [];
+  const guided = input.mode === "service_request";
 
-  const asksHuman = HUMAN_REQUEST_PATTERNS.some((pattern) => pattern.test(lower));
+  const humanPatterns = guided ? EXPLICIT_HUMAN_PATTERNS : HUMAN_REQUEST_PATTERNS;
+  const asksHuman = humanPatterns.some((pattern) => pattern.test(lower));
   if (asksHuman) signals.push("client_asked_for_human");
 
   const complains = COMPLAINT_PATTERNS.some((pattern) => pattern.test(lower));
   if (complains) signals.push("client_complaint");
 
-  const replyPromised = HANDOFF_CLAIM_PATTERNS.some((pattern) => pattern.test(reply));
+  const replyPromised = !guided && HANDOFF_CLAIM_PATTERNS.some((pattern) => pattern.test(reply));
   if (replyPromised) signals.push("assistant_promised_handoff");
 
   if (asksHuman || complains || replyPromised) {
@@ -148,6 +172,12 @@ export function detectEscalation(input: DetectEscalationInput): EscalationDecisi
       reasonEn,
       signals,
     };
+  }
+
+  if (guided) {
+    // The guided request records the brief itself (NEW_REQUEST); a NEW_LEAD
+    // alert for the same answers would be a duplicate with the wrong category.
+    return { escalate: false, category: null, severity: null, reasonAr: "", reasonEn: "", signals: [...signals, "guided_service_request"] };
   }
 
   const lead = analyseLead({ latestMessage: latest, history: input.history ?? [] });
