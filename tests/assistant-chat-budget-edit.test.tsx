@@ -21,6 +21,7 @@ import {
   serviceRequestEstimate,
   serviceRequestSummary,
 } from "../src/components/assistant-chat";
+import { plainText, plainTexts } from "./helpers/bidi";
 
 const STORAGE_KEY = "ofoq:chat:service-request";
 const WELCOME_AR = SERVICE_REQUEST_WELCOME.ar;
@@ -167,11 +168,11 @@ describe("budget changed mid-conversation", () => {
     await answerUpToTargeting();
 
     type("طيب من 200 إلى 500");
-    await waitFor(() => expect(shownBodies().some((body) => body.includes("حدّثت الميزانية إلى 200-500$"))).toBe(true));
+    await waitFor(() => expect(plainTexts(shownBodies()).some((body) => body.includes("حدّثت الميزانية إلى 200-500$"))).toBe(true));
 
-    const bodies = shownBodies();
+    const bodies = plainTexts(shownBodies());
     const update = bodies.find((body) => body.includes("حدّثت الميزانية"))!;
-    expect(update).toContain(budgetUpdatedMessage(REVISED_ANSWERS, "ar"));
+    expect(update).toContain(plainText(budgetUpdatedMessage(REVISED_ANSWERS, "ar")));
     // The open question is asked again; no clarification, no assistant turn.
     expect(update).toContain(QUESTION_AR.TARGETING);
     expect(bodies.some((body) => body.includes("ما قدرت أحدد الخيار"))).toBe(false);
@@ -184,10 +185,10 @@ describe("budget changed mid-conversation", () => {
 
     // Targeting then closes the questions with the revised summary and pricing.
     await chooseAndWait("🇮🇶 العراق كله", "تمام، فهمت طلبك");
-    expect(shownBodies()).toContain(serviceRequestSummary(REVISED_ANSWERS, "ar"));
+    expect(plainTexts(shownBodies())).toContain(plainText(serviceRequestSummary(REVISED_ANSWERS, "ar")));
     expect(estimates()).toEqual([serviceRequestEstimate(REVISED_ANSWERS, "ar", { email: CLIENT_EMAIL })]);
-    expect(estimates()[0]).toContain("ميزانيتك: 200-500$");
-    expect(estimates()[0]).toContain("التقدير محسوب على 500$");
+    expect(plainText(estimates()[0]!)).toContain("ميزانيتك: 200-500$");
+    expect(plainText(estimates()[0]!)).toContain("التقدير محسوب على 500$");
   });
 
   it("after the summary, the revised summary and a new estimate are shown and the first ones are kept", async () => {
@@ -201,12 +202,12 @@ describe("budget changed mid-conversation", () => {
     await waitFor(() => expect(estimates()).toHaveLength(2));
 
     const revisedSummary = serviceRequestSummary(REVISED_ANSWERS, "ar", { revised: true });
-    expect(revisedSummary).toContain("حدّثت الميزانية إلى 200-500$");
-    expect(shownBodies()).toContain(revisedSummary);
+    expect(plainText(revisedSummary)).toContain("حدّثت الميزانية إلى 200-500$");
+    expect(plainTexts(shownBodies())).toContain(plainText(revisedSummary));
     // History is not rewritten: the first summary and estimate stay as they were.
-    expect(shownBodies()).toContain(serviceRequestSummary(FIRST_ANSWERS, "ar"));
+    expect(plainTexts(shownBodies())).toContain(plainText(serviceRequestSummary(FIRST_ANSWERS, "ar")));
     expect(estimates()).toEqual([firstEstimate, serviceRequestEstimate(REVISED_ANSWERS, "ar", { email: CLIENT_EMAIL })]);
-    expect(estimates()[1]).toContain("ميزانيتك: 200-500$");
+    expect(plainText(estimates()[1]!)).toContain("ميزانيتك: 200-500$");
     expect(estimates()[1]).not.toBe(firstEstimate);
     // The contact question is still the open one, with its options.
     expect(storedContext()).toMatchObject({ step: "SUMMARY", answers: { budget: "200_500", budgetRange: "200-500", budgetAmount: "500" } });
@@ -228,7 +229,7 @@ describe("budget changed mid-conversation", () => {
     await answerUpToTargeting();
 
     type("خلي الميزانية بين المئتين والخمسمية دولار");
-    await waitFor(() => expect(shownBodies().some((body) => body.includes("حدّثت الميزانية إلى 200-500$"))).toBe(true));
+    await waitFor(() => expect(plainTexts(shownBodies()).some((body) => body.includes("حدّثت الميزانية إلى 200-500$"))).toBe(true));
 
     const [url, init] = postCalls("/api/chat/budget-intent")[0]!;
     expect(String(url)).toContain("/api/chat/budget-intent");
@@ -237,7 +238,7 @@ describe("budget changed mid-conversation", () => {
     expect(storedContext()).toMatchObject({ step: "TARGETING", answers: { budget: "200_500", budgetRange: "200-500", budgetAmount: "500" } });
   });
 
-  it("a budget-looking message the AI cannot read is answered with the options, never a random reply", async () => {
+  it("a budget-looking message the AI cannot read re-shows the budget options, never a random reply", async () => {
     aiBudget = null;
     await openChat();
     await answerUpToTargeting();
@@ -245,12 +246,13 @@ describe("budget changed mid-conversation", () => {
     type("ميزانية على كيفكم تقريباً");
     await waitFor(() => expect(postCalls("/api/chat/budget-intent")).toHaveLength(1));
     await waitFor(() => expect(shownBodies().at(-1)).toContain("ما قدرت أحدد الخيار"));
-    // The step and the budget did not change; the message went to the assistant
-    // flagged as part of the guided request (not a handoff), nothing was guessed.
+    // The budget options are offered again, the message is NEVER handed to the
+    // assistant (whose only possible answer would be a «cannot confirm the
+    // budget» refusal), the step did not change and nothing was guessed.
+    expect(shownBodies().at(-1)).toContain("200-500$");
+    expect(postCalls("/api/chat")).toHaveLength(0);
     expect(storedContext()).toMatchObject({ step: "TARGETING", answers: { budget: "under_200" } });
     expect(storedContext()?.answers.budgetRange).toBeUndefined();
-    const chatPost = postCalls("/api/chat").at(-1);
-    expect(JSON.parse(String(chatPost?.[1]?.body))).toEqual({ message: "ميزانية على كيفكم تقريباً", intent: "service_request" });
   });
 
   it("does not treat a plain targeting answer as a budget", async () => {

@@ -282,6 +282,45 @@ export function calculateServiceEstimate(input: PricingInput): PricingResult {
   };
 }
 
+/**
+ * Bidi isolates (U+2066 / U+2069) around a Latin-digit run.
+ *
+ * An Arabic message is laid out right-to-left, and the Unicode bidi algorithm
+ * treats the digits of a range as Arabic numbers once an Arabic letter precedes
+ * them: the two ends are then reordered on screen, so «~92,000-172,000» — which
+ * is built in the right order — is *displayed* as «~172,000-92,000» while the
+ * saved text is correct. Isolating the run pins it to left-to-right order, so
+ * what the client reads is exactly what was generated: smallest value first.
+ *
+ * English (LTR) text needs no isolation and is returned unchanged, which keeps
+ * the stored English copy free of invisible characters.
+ */
+export const LTR_ISOLATE_START = "\u2066";
+export const LTR_ISOLATE_END = "\u2069";
+
+export function isolateLtr(text: string, locale: Locale): string {
+  return locale === "ar" ? `${LTR_ISOLATE_START}${text}${LTR_ISOLATE_END}` : text;
+}
+
+/**
+ * A `[min, max]` counter range as the client reads it: `~92,000-172,000`, the
+ * smaller value always first (`1000-1500` never becomes `1500-1000`, whatever
+ * order the pair arrives in), isolated for Arabic so the two ends cannot swap
+ * places on screen.
+ */
+export function formatCountRange(range: CountRange, locale: Locale): string {
+  const min = Math.min(range[0], range[1]);
+  const max = Math.max(range[0], range[1]);
+  return isolateLtr(`~${formatCount(min, locale)}-${formatCount(max, locale)}`, locale);
+}
+
+/** A USD range the same way: `~650-1,560$`, smaller value first. */
+export function formatUsdRange(min: number, max: number, locale: Locale): string {
+  const low = Math.min(min, max);
+  const high = Math.max(min, max);
+  return isolateLtr(`~${formatCount(low, locale)}-${formatCount(high, locale)}$`, locale);
+}
+
 /** Whole-dollar USD display, with Latin digits in Arabic UI as well. */
 export function formatUsd(amount: number, locale: Locale): string {
   const formatted = new Intl.NumberFormat(locale === "ar" ? "ar-IQ-u-nu-latn" : "en-GB", {

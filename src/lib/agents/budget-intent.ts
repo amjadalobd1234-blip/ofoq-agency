@@ -20,6 +20,7 @@ import {
   MIN_BUDGET_AMOUNT,
   budgetFromAmounts,
   normalizeBudgetText,
+  openBudgetFromAmount,
   parseBudgetText,
   type ParsedBudget,
 } from "./budget-parser";
@@ -34,13 +35,15 @@ export interface BudgetIntentResolution {
 
 const SYSTEM_PROMPT = [
   "You extract the marketing budget a client states in one message, for the Ofoq agency assistant (Iraq; Arabic, Iraqi dialect, or English).",
-  'Answer with JSON only, exactly: {"min": <number|null>, "max": <number|null>, "currency": "USD"|"IQD"|null}',
+  'Answer with JSON only, exactly: {"min": <number|null>, "max": <number|null>, "open": "over"|"under"|null, "currency": "USD"|"IQD"|null}',
   "Rules:",
-  "  - A single amount («ميزانيتي 350», «خمسمية دولار») → min = max = that amount.",
-  "  - A range («من 200 إلى 500», «بين 200 و 500», «200-500») → min = lower bound, max = upper bound, whatever order the client used.",
+  "  - A single amount («ميزانيتي 350», «خمسمية دولار») → min = max = that amount, open = null.",
+  "  - A closed range («من 200 إلى 500», «بين 200 و 500», «200-500») → min = lower bound, max = upper bound, open = null, whatever order the client used.",
+  '  - An open floor — «أكثر من 500», «فوق الخمسمية», «أزيد من 500», «more than 500», «over 500» → open = "over", min = the stated floor, max = null.',
+  '  - An open ceiling — «أقل من 200», «تحت المئتين», «less than 200», «under 200» → open = "under", max = the stated ceiling, min = null.',
   "  - Number words count: مية=100، مئتين=200، ثلاثمية=300، خمسمية=500، ألف=1000، نص ألف=500، 1k=1000.",
   "  - «$», «دولار», «usd» → USD. «دينار», «د.ع», «IQD» → IQD. No currency named → null.",
-  '  - If the message states no budget, or the number is clearly something else (a phone number, a date, a number of posts or days), answer {"min":null,"max":null,"currency":null}.',
+  '  - If the message states no budget, or the number is clearly something else (a phone number, a date, a number of posts or days), answer {"min":null,"max":null,"open":null,"currency":null}.',
   "Never invent an amount. Never add text outside the JSON object.",
 ].join("\n");
 
@@ -80,6 +83,22 @@ export function parseBudgetAnswer(answer: string): ParsedBudget | null {
 
   const min = toNumber(record.min ?? record.amount ?? record.value);
   const max = toNumber(record.max ?? record.amount ?? record.value);
+
+  // An open-ended statement («أكثر من 500», «أقل من 200»): the model names the
+  // side it is open on, and the bounds come from the same published bands the
+  // patterns use — never from a value the model invented for the other end.
+  const openRaw = typeof record.open === "string" ? record.open.trim().toLowerCase() : "";
+  const openKind = /^(over|more|above|more_than|أكثر|اكثر)$/.test(openRaw)
+    ? "over"
+    : /^(under|less|below|less_than|أقل|اقل)$/.test(openRaw)
+      ? "under"
+      : null;
+  if (openKind) {
+    const stated = openKind === "over" ? (min ?? max) : (max ?? min);
+    if (stated === null || stated < MIN_BUDGET_AMOUNT || stated > MAX_BUDGET_AMOUNT) return null;
+    return openBudgetFromAmount(openKind, Math.round(stated), currencyRaw ? "USD" : null);
+  }
+
   const amounts = [min, max].filter((value): value is number => value !== null && value >= MIN_BUDGET_AMOUNT && value <= MAX_BUDGET_AMOUNT);
   if (amounts.length === 0) return null;
   // One missing bound → a single value; both present → a range, order-independent.

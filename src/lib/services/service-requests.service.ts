@@ -40,7 +40,7 @@ import {
   type ServiceRequestAnswers,
   type ServiceRequestOption,
 } from "@/lib/agents/service-request";
-import { calculateServiceEstimate, formatCount, type PricingResult } from "@/lib/agents/pricing-agent";
+import { calculateServiceEstimate, formatCount, isolateLtr, type PricingResult } from "@/lib/agents/pricing-agent";
 import { createCustomer, findCustomerById } from "@/lib/repositories/customers.repo";
 import { createOffer } from "@/lib/repositories/offers.repo";
 import { DEFAULT_OWNER_EMAIL } from "@/lib/services/escalation.service";
@@ -267,17 +267,17 @@ export function serviceRequestRecordSummary(
   if (input.clientEmail) lines.push(ar ? `بريد العميل: ${input.clientEmail}` : `Client email: ${input.clientEmail}`);
   if (input.customerName) lines.push(ar ? `اسم العميل: ${input.customerName}` : `Client name: ${input.customerName}`);
   if (result.resultsKind === "numbers" && result.expectedReach && result.expectedVisits && result.expectedLeads) {
-    const count = (value: number): string => formatCount(value, locale);
+    // Smallest value first, and isolated for Arabic so the two ends keep that
+    // order on screen (the same isolation `formatCountRange()` applies).
+    const range = (pair: [number, number]): string => {
+      const min = Math.min(pair[0], pair[1]);
+      const max = Math.max(pair[0], pair[1]);
+      return isolateLtr(`${formatCount(min, locale)} - ${formatCount(max, locale)}`, locale);
+    };
     lines.push(
-      ar
-        ? `الظهور المتوقع: ${count(result.expectedReach[0])} - ${count(result.expectedReach[1])}`
-        : `Expected impressions: ${count(result.expectedReach[0])} - ${count(result.expectedReach[1])}`,
-      ar
-        ? `الزيارات المتوقعة: ${count(result.expectedVisits[0])} - ${count(result.expectedVisits[1])}`
-        : `Expected visits: ${count(result.expectedVisits[0])} - ${count(result.expectedVisits[1])}`,
-      ar
-        ? `المهتمون المتوقعون: ${count(result.expectedLeads[0])} - ${count(result.expectedLeads[1])}`
-        : `Expected leads: ${count(result.expectedLeads[0])} - ${count(result.expectedLeads[1])}`,
+      ar ? `الظهور المتوقع: ${range(result.expectedReach)}` : `Expected impressions: ${range(result.expectedReach)}`,
+      ar ? `الزيارات المتوقعة: ${range(result.expectedVisits)}` : `Expected visits: ${range(result.expectedVisits)}`,
+      ar ? `المهتمون المتوقعون: ${range(result.expectedLeads)}` : `Expected leads: ${range(result.expectedLeads)}`,
     );
   }
   return lines.join("\n");

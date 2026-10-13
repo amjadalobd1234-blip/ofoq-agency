@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { getDb } from "../src/lib/db";
+import { plainText } from "./helpers/bidi";
 import {
   ORDER_CODE_PATTERN,
   SERVICE_REQUEST_CATEGORY,
@@ -17,6 +18,7 @@ import {
   whatsappLink,
   type ServiceRequestSubmissionInput,
 } from "../src/lib/services/service-requests.service";
+import { serviceRequestEstimate, serviceRequestSummary } from "../src/lib/agents/service-request";
 
 /**
  * Finishing the guided request must leave three real traces: the `offers` row
@@ -124,18 +126,67 @@ describe("guided service request — the offers row", () => {
     });
     expect(record.summaryAr).toContain("الخدمة: إعلانات");
     expect(record.summaryAr).toContain("الميزانية: أقل من 200$");
-    expect(record.summaryAr).toContain("الظهور المتوقع: 37,000 - 69,000");
-    expect(record.summaryEn).toContain("Expected impressions: 37,000 - 69,000");
+    expect(plainText(record.summaryAr)).toContain("الظهور المتوقع: 37,000 - 69,000");
+    expect(plainText(record.summaryEn)).toContain("Expected impressions: 37,000 - 69,000");
+  });
+
+  it("shows the budget the client chose in the summary — the range, never the planning amount", () => {
+    // Issue 4: the client pressed «200-500$» and the closing messages said
+    // «ميزانيتك: $500». The mid price ($350) stays a calculation input only.
+    const answers = {
+      type: "ads",
+      size: "medium",
+      budget: "200_500",
+      budgetRange: "200-500",
+      budgetAmount: "500",
+      targeting: "iraq_all",
+      contact: "whatsapp",
+      phone: TYPED_NUMBER,
+    } as const;
+
+    const summary = plainText(serviceRequestSummary({ ...answers }, "ar"));
+    expect(summary).toContain("- الميزانية: 200-500$");
+    expect(summary).not.toContain("- الميزانية: 500$");
+    expect(summary).not.toContain("- الميزانية: 350$");
+
+    const estimate = plainText(serviceRequestEstimate({ ...answers }, "ar"));
+    expect(estimate).toContain("ميزانيتك: 200-500$");
+    // The amount the estimate was actually priced on is stated separately, so
+    // the range above is never mistaken for a $500 budget.
+    expect(estimate).toContain("(التقدير محسوب على 500$)");
+    expect(estimate).not.toMatch(/ميزانيتك: 500\$/);
+    expect(estimate).not.toContain("350$");
+
+    // The record the team reads carries the same range, not the planning amount.
+    const record = prepareServiceRequestOffer(whatsappRequest({ answers: { ...answers }, requestId: "req-summary-1" }));
+    expect(plainText(record.summaryAr)).toContain("الميزانية: 200-500$");
+    expect({ ...record.budgetDetail, display: plainText(record.budgetDetail.display) }).toMatchObject({
+      range: "200-500",
+      amount: 500,
+      display: "200-500$",
+    });
+
+    // The same for the pressed buttons with no typed range: the label they
+    // pressed is what the client reads back.
+    const optionOnly = { type: "ads", size: "medium", budget: "under_200", targeting: "iraq_all" } as const;
+    expect(plainText(serviceRequestSummary({ ...optionOnly }, "ar"))).toContain("- الميزانية: أقل من 200$");
+    expect(plainText(serviceRequestEstimate({ ...optionOnly }, "ar"))).toContain("ميزانيتك: أقل من 200$");
   });
 
   it("stores a typed range as 200-500 (never «500 من 200») and prices it on the upper bound", () => {
     const record = prepareServiceRequestOffer(whatsappRequest({ requestId: "req-range-1" }));
 
-    expect(record.budgetDetail).toEqual({ band: "200_500", range: "200-500", amount: 500, source: "typed", display: "200-500$" });
-    expect(record.budget).toBe("200-500$");
-    expect(record.summaryAr).toContain("الميزانية: 200-500$");
+    expect({ ...record.budgetDetail, display: plainText(record.budgetDetail.display) }).toEqual({
+      band: "200_500",
+      range: "200-500",
+      amount: 500,
+      source: "typed",
+      display: "200-500$",
+    });
+    expect(plainText(record.budget)).toBe("200-500$");
+    expect(plainText(record.summaryAr)).toContain("الميزانية: 200-500$");
     expect(record.summaryAr).not.toContain("500 من 200");
-    expect(record.summaryEn).toContain("Budget: 200-500$");
+    expect(plainText(record.summaryEn)).toContain("Budget: 200-500$");
     const breakdown = JSON.parse(record.offer.pricing_breakdown) as Record<string, unknown>;
     expect(breakdown).toMatchObject({ budgetBand: "200_500", budgetAmount: 500, budgetRange: "200-500", budgetSource: "typed" });
     // $500 → several platforms → the published multipliers for that scope.
@@ -198,7 +249,13 @@ describe("guided service request — WhatsApp contact data", () => {
       whatsappLink: "https://wa.me/9647707048629",
     });
     expect(alert.meta.whatsapp).toEqual({ channel: "واتساب", number: TYPED_NUMBER, international: "9647707048629", link: "https://wa.me/9647707048629" });
-    expect(alert.meta.budget).toEqual({ band: "200_500", range: "200-500", amount: 500, source: "typed", display: "200-500$" });
+    expect({ ...alert.meta.budget, display: plainText(String(alert.meta.budget.display)) }).toEqual({
+      band: "200_500",
+      range: "200-500",
+      amount: 500,
+      source: "typed",
+      display: "200-500$",
+    });
 
     // The number is whatever the client typed — a different client, a different number.
     const other = buildServiceRequestAlert(
@@ -244,7 +301,7 @@ describe("guided service request — saving (local store)", () => {
     expect(alert!.severity).not.toBe("URGENT");
     expect(alert!.body_ar).toContain(`رقم الطلب: ${result.orderCode}`);
     expect(alert!.body_ar).toContain("الخدمة: إعلانات");
-    expect(alert!.body_ar).toContain("الميزانية: 200-500$");
+    expect(plainText(alert!.body_ar)).toContain("الميزانية: 200-500$");
     expect(alert!.body_ar).toContain("قناة التواصل: واتساب");
     expect(alert!.body_ar).toContain(`رقم العميل: ${TYPED_NUMBER}`);
     expect(alert!.body_ar).toContain("رابط واتساب: https://wa.me/9647707048629");

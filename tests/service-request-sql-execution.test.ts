@@ -22,6 +22,8 @@ import path from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { plainText } from "./helpers/bidi";
+
 import {
   SERVICE_REQUEST_OFFER_STATUS,
   buildServiceRequestAlert,
@@ -216,14 +218,20 @@ describe("ofoq_client_service_request on PostgreSQL", () => {
     expect(row.body_ar).toContain("قناة التواصل: واتساب");
     expect(row.body_ar).toContain(`رقم العميل: ${TYPED_NUMBER}`);
     expect(row.body_ar).toContain("رابط واتساب: https://wa.me/9647707048629");
-    expect(row.body_ar).toContain("الميزانية: 200-500$");
+    expect(plainText(row.body_ar)).toContain("الميزانية: 200-500$");
     expect(row.body_ar).not.toContain("500 من 200");
 
     const meta = JSON.parse(row.meta) as Record<string, any>;
     expect(meta.contact).toEqual({ channel: "whatsapp", value: TYPED_NUMBER, whatsappNumber: "9647707048629", whatsappLink: "https://wa.me/9647707048629" });
     expect(meta.whatsapp).toEqual({ channel: "واتساب", number: TYPED_NUMBER, international: "9647707048629", link: "https://wa.me/9647707048629" });
     expect(meta).toMatchObject({ orderCode: saved.orderCode, offerId: saved.offerId, offerStatus: "DRAFT", source: "guided_service_request" });
-    expect(meta.budget).toEqual({ band: "200_500", range: "200-500", amount: 500, source: "typed", display: "200-500$" });
+    expect({ ...meta.budget, display: plainText(String(meta.budget.display)) }).toEqual({
+      band: "200_500",
+      range: "200-500",
+      amount: 500,
+      source: "typed",
+      display: "200-500$",
+    });
 
     // The team is notified and the trail is written; the customer's phone is now known.
     const notifications = await db.query<{ channel: string; status: string; user_id: string }>(

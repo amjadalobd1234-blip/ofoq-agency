@@ -8,6 +8,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AssistantChat, SERVICE_REQUEST_ORDER_CODE, serviceRequestEstimate } from "../src/components/assistant-chat";
+import { plainText } from "./helpers/bidi";
 
 const STORAGE_KEY = "ofoq:chat:service-request";
 const CLIENT_EMAIL = "client@example.com";
@@ -88,8 +89,10 @@ describe("client-facing service estimate", () => {
     await answer(ADS_ANSWERS);
 
     const body = estimateBubbles()[0]!.querySelector("p")?.textContent ?? "";
-    expect(body).toBe([
-      "ميزانيتك: 200$ 🟡",
+    // The pressed button is shown as itself — «أقل من 200$», never the $200 the
+    // estimate plans on — followed by the amount it did plan on.
+    expect(plainText(body)).toBe([
+      "ميزانيتك: أقل من 200$ 🟡 (التقدير محسوب على 200$)",
       "",
       "💡 تغطي 16 يوم إعلان فعّال",
       "",
@@ -114,20 +117,20 @@ describe("client-facing service estimate", () => {
     await answer(["إعلانات", "متوسط", "500-1500$", "🇮🇶 العراق كله"]);
 
     const body = estimateBubbles()[0]!.querySelector("p")?.textContent ?? "";
-    expect(body).toContain("ميزانيتك: 1,500$ 🟢🟢");
-    expect(body).toContain("💡 تغطي 30 يوم إعلان فعّال");
-    expect(body).toContain("📊 النتائج المتوقعة:");
-    expect(body).toContain("• الظهور: ~278,000-517,000");
-    expect(body).toContain("• الزيارات: ~2,780-5,170");
-    expect(body).toContain("• المهتمون: ~69-129");
-    expect(body).not.toContain("تكفي لـ");
+    expect(plainText(body)).toContain("ميزانيتك: 500-1500$ 🟢🟢 (التقدير محسوب على 1,500$)");
+    expect(plainText(body)).toContain("💡 تغطي 30 يوم إعلان فعّال");
+    expect(plainText(body)).toContain("📊 النتائج المتوقعة:");
+    expect(plainText(body)).toContain("• الظهور: ~278,000-517,000");
+    expect(plainText(body)).toContain("• الزيارات: ~2,780-5,170");
+    expect(plainText(body)).toContain("• المهتمون: ~69-129");
+    expect(plainText(body)).not.toContain("تكفي لـ");
   });
 
   it("shows only the official price for design, with no invented performance stats", async () => {
     await openChat();
     await answer(DESIGN_ANSWERS);
 
-    const body = estimateBubbles()[0]!.querySelector("p")?.textContent ?? "";
+    const body = plainText(estimateBubbles()[0]!.querySelector("p")?.textContent ?? "");
     expect(body).toBe([
       "السعر التقديري: ~650-1,560$",
       "",

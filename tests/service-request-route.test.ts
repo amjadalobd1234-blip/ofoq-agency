@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { plainText } from "./helpers/bidi";
+
 /**
  * End-to-end wiring of POST /api/chat/service-request — the route the chat calls
  * when the guided request is complete.
@@ -153,7 +155,7 @@ describe("POST /api/chat/service-request", () => {
     expect(body).toContain("قناة التواصل: واتساب");
     expect(body).toContain(`رقم العميل: ${TYPED_NUMBER}`);
     expect(body).toContain("رابط واتساب: https://wa.me/9647707048629");
-    expect(body).toContain("الميزانية: 200-500$");
+    expect(plainText(body)).toContain("الميزانية: 200-500$");
     expect(body).not.toContain("500 من 200");
     const meta = args.p_meta as Record<string, any>;
     expect(meta).toMatchObject({ source: "guided_service_request", offerStatus: "DRAFT", conversationId: "conv-1" });
