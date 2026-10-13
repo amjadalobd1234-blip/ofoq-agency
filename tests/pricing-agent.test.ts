@@ -17,6 +17,7 @@ import {
   spreadRange,
   type PricingInput,
 } from "../src/lib/agents/pricing-agent";
+import { plainText } from "./helpers/bidi";
 import {
   SERVICE_REQUEST_BASIC_STEPS,
   SERVICE_REQUEST_QUESTIONS,
@@ -117,12 +118,23 @@ describe("pricing agent — the four basic questions, budget-derived scope and h
       }
     }
 
-    // The client-facing message prints the values smallest first, always.
+    // The client-facing message prints the values smallest first, always: the
+    // text holds min before max AND is isolated for Arabic (U+2066 … U+2069) so
+    // the RTL line cannot swap the two ends on screen.
     const body = serviceRequestEstimate({ type: "ads", size: "medium", budget: "under_200", targeting: "iraq_all" }, "ar");
-    const impressions = /• الظهور: ~([\d,]+)-([\d,]+)/.exec(body);
-    expect(impressions).not.toBeNull();
-    expect(Number(impressions![1]!.replace(/,/g, ""))).toBeLessThan(Number(impressions![2]!.replace(/,/g, "")));
-    expect(body).toContain("• الظهور: ~37,000-69,000");
+    expect(body).toContain("• الظهور: \u2066~37,000-69,000\u2069");
+    expect(body).toContain("• الزيارات: \u2066~370-690\u2069");
+    expect(body).toContain("• المهتمون: \u2066~9-17\u2069");
+    const plain = plainText(body);
+    for (const metric of ["الظهور", "الزيارات", "المهتمون"]) {
+      const printed = new RegExp(`• ${metric}: ~([\\d,]+)-([\\d,]+)`).exec(plain);
+      expect(printed, `${metric} is printed as a range`).not.toBeNull();
+      expect(Number(printed![1]!.replace(/,/g, ""))).toBeLessThan(Number(printed![2]!.replace(/,/g, "")));
+    }
+    expect(plain).toContain("• الظهور: ~37,000-69,000");
+    // The smaller value is what the client reads first — the reversed string is
+    // nowhere in the text, isolated or not.
+    expect(plain).not.toContain("172,000-92,000");
   });
 
   it("never uses the old «صريحين معك» wording and says «تغطي» instead", () => {
@@ -188,9 +200,9 @@ describe("pricing agent — the four basic questions, budget-derived scope and h
     const body = serviceRequestEstimate({ type: "ads", size: "medium", budget: "under_200", targeting: "iraq_all" }, "ar", {
       email: "client@example.com",
     });
-    expect(body).toBe(
+    expect(plainText(body)).toBe(
       [
-        "ميزانيتك: 200$ 🟡",
+        "ميزانيتك: أقل من 200$ 🟡 (التقدير محسوب على 200$)",
         "",
         "💡 تغطي 16 يوم إعلان فعّال",
         "",
@@ -223,13 +235,13 @@ describe("pricing agent — the four basic questions, budget-derived scope and h
     const designBody = serviceRequestEstimate({ type: "design", size: "medium", budget: "under_200", targeting: "baghdad" }, "ar", {
       email: "client@example.com",
     });
-    expect(designBody).toContain("السعر التقديري: ~500-1,200$");
+    expect(plainText(designBody)).toContain("السعر التقديري: ~500-1,200$");
     // Above $200 the request is planned across several platforms, so the quote
     // carries the platform multiplier.
-    expect(serviceRequestEstimate({ type: "design", size: "medium", budget: "200_500" }, "ar")).toContain(
+    expect(plainText(serviceRequestEstimate({ type: "design", size: "medium", budget: "200_500" }, "ar"))).toContain(
       "السعر التقديري: ~650-1,560$",
     );
-    expect(designBody).not.toMatch(/الظهور|الزيارات|المهتمون|📊/);
+    expect(plainText(designBody)).not.toMatch(/الظهور|الزيارات|المهتمون|📊/);
     expect(designBody).toContain("□ 📧 إيميل: client@example.com");
 
     const other = estimate({ type: "other", budget: "under_200" });

@@ -30,6 +30,9 @@ import {
   adDaysForBudget,
   calculateServiceEstimate,
   formatCount,
+  formatCountRange,
+  formatUsdRange,
+  isolateLtr,
   type BudgetBand,
   type PlatformScope,
   type PricingInput,
@@ -37,7 +40,7 @@ import {
   type ProjectSize,
   type TargetingArea,
 } from "./pricing-agent";
-import { budgetBandForAmount, formatBudgetRange, parseBudgetRangeText, type BudgetDetail } from "./budget-parser";
+import { budgetBandForAmount, parseStoredBudget, type BudgetDetail, type BudgetKind } from "./budget-parser";
 
 export type { BudgetDetail } from "./budget-parser";
 
@@ -365,18 +368,33 @@ export function answerServiceRequest(
  * never the words the client used («500 من 200» is impossible here).
  */
 function applyBudgetDetail(answers: ServiceRequestAnswers, band: string, detail: BudgetDetail | null | undefined): void {
-  const bounds = detail ? parseBudgetRangeText(detail.range) : null;
-  if (detail && bounds && Number.isFinite(detail.amount) && detail.amount > 0 && budgetBandForAmount(detail.amount) === band) {
-    answers.budgetRange = formatBudgetRange(bounds);
-    answers.budgetAmount = String(Math.round(detail.amount));
+  const stored = detail ? parseStoredBudget(detail.range) : null;
+  const amount = detail ? Math.round(detail.amount) : 0;
+  // The text and the amount must be exactly the ones the parser derives from
+  // each other — an open budget («>500» planned on its published $1,000)
+  // included. Anything else keeps the band alone and drops the details.
+  const consistent =
+    stored !== null &&
+    Number.isFinite(detail?.amount) &&
+    amount > 0 &&
+    stored.amount === amount &&
+    stored.band === band;
+  if (consistent) {
+    answers.budgetRange = stored.text;
+    answers.budgetAmount = String(amount);
   } else {
     delete answers.budgetRange;
     delete answers.budgetAmount;
   }
 }
 
-/** Steps at which a budget already given may still be changed in the conversation. */
-const BUDGET_REVISION_STEPS: ReadonlySet<ServiceRequestStep> = new Set(["TARGETING", "SUMMARY"]);
+/**
+ * Steps at which a budget already given may still be changed in the
+ * conversation: while a question is open, while the WhatsApp number is
+ * expected, and after the request was completed — «اريد الميزانية أكثر من 500»
+ * typed at the end is a budget update, never a question for the assistant.
+ */
+const BUDGET_REVISION_STEPS: ReadonlySet<ServiceRequestStep> = new Set(["TARGETING", "SUMMARY", "PHONE", "DONE"]);
 
 /** True when a new budget message may update the request instead of being rejected. */
 export function canReviseBudget(state: ServiceRequestState): boolean {
@@ -395,11 +413,11 @@ export function reviseBudget(
   at: string = new Date().toISOString(),
 ): ServiceRequestState {
   if (!canReviseBudget(state)) return state;
-  const bounds = parseBudgetRangeText(budget.range);
-  if (!bounds || !Number.isFinite(budget.amount) || budget.amount <= 0) return state;
-  const band = budgetBandForAmount(budget.amount);
-  const answers: ServiceRequestAnswers = { ...state.answers, budget: band };
-  applyBudgetDetail(answers, band, budget);
+  const stored = parseStoredBudget(budget.range);
+  const amount = Math.round(budget.amount);
+  if (!stored || !Number.isFinite(budget.amount) || amount <= 0 || stored.amount !== amount) return state;
+  const answers: ServiceRequestAnswers = { ...state.answers, budget: stored.band };
+  applyBudgetDetail(answers, stored.band, { range: stored.text, amount: stored.amount });
   return {
     ...state,
     answers,
@@ -409,7 +427,7 @@ export function reviseBudget(
 
 /** The band id and planning details of a typed budget. */
 export function budgetAnswerFor(budget: BudgetDetail): { band: BudgetBand; detail: BudgetDetail } {
-  return { band: budgetBandForAmount(budget.amount), detail: budget };
+  return { band: parseStoredBudget(budget.range)?.band ?? budgetBandForAmount(budget.amount), detail: budget };
 }
 
 /** WhatsApp number rules: 10–15 digits, starting with 07, +964 or 964. */
@@ -556,32 +574,69 @@ function isBudgetBand(value: string | undefined): value is BudgetBand {
   return value === "under_200" || value === "200_500" || value === "500_1500" || value === "over_1500";
 }
 
-/**
- * The typed budget of the request (`{ range: "200-500", amount: 500 }`), or
- * `null` when a band button was pressed or the stored details are inconsistent
- * (amount outside its band, range that does not parse).
- */
-export function typedBudget(answers: ServiceRequestAnswers): (BudgetDetail & { min: number; max: number }) | null {
-  if (!isBudgetBand(answers.budget)) return null;
-  const bounds = parseBudgetRangeText(answers.budgetRange);
-  const amount = Number(answers.budgetAmount);
-  if (!bounds || !Number.isFinite(amount) || amount <= 0) return null;
-  if (budgetBandForAmount(amount) !== answers.budget) return null;
-  if (amount !== bounds.max) return null;
-  return { range: formatBudgetRange(bounds), amount, min: bounds.min, max: bounds.max };
+/** The typed budget of a request, as stored in its answers. */
+export interface TypedBudget extends BudgetDetail {
+  kind: BudgetKind;
+  /** Lower bound of the stated budget («أكثر من 500» → 500; «أقل من 200» → 0). */
+  min: number;
+  /** Upper bound («200-500» → 500; «أكثر من 500» → the band's ceiling). */
+  max: number;
+  /** The client's own number of an open budget, null for closed ones. */
+  stated: number | null;
+  /** The published band the planning amount falls in. */
+  band: BudgetBand;
 }
 
 /**
- * The budget as the client sees it: the typed range («200-500$» / «350$») or
- * the label of the band they pressed («أقل من 200$», «200-500$»). The stored
- * order is always smallest first — «500 من 200» cannot be produced.
+ * The typed budget of the request (`{ range: "200-500", amount: 500 }`, or
+ * `{ range: ">500", amount: 1000 }` for «أكثر من 500»), or `null` when a band
+ * button was pressed or the stored details are inconsistent (an unknown text,
+ * an amount the text does not derive, a band that is not the amount's).
+ */
+export function typedBudget(answers: ServiceRequestAnswers): TypedBudget | null {
+  if (!isBudgetBand(answers.budget)) return null;
+  const stored = parseStoredBudget(answers.budgetRange);
+  const amount = Number(answers.budgetAmount);
+  if (!stored || !Number.isFinite(amount) || amount <= 0) return null;
+  if (stored.amount !== Math.round(amount)) return null;
+  if (stored.band !== answers.budget) return null;
+  return {
+    range: stored.text,
+    amount: stored.amount,
+    kind: stored.kind,
+    min: stored.min,
+    max: stored.max,
+    stated: stored.stated,
+    band: stored.band,
+  };
+}
+
+/**
+ * The budget as the client reads it — exactly the shape they gave, never the
+ * planning amount standing in for it:
+ *
+ *   typed range    «200-500$»        single value  «350$»
+ *   typed floor    «أكثر من 500$»    typed ceiling «أقل من 200$»
+ *   pressed button the button's own label («200-500$», «أكثر من 1500$»)
+ *
+ * Ranges are isolated for Arabic (`isolateLtr`) so the two ends keep their
+ * smallest-first order on screen; the stored order is always smallest first, so
+ * «500 من 200» cannot be produced.
  */
 export function budgetDisplayText(answers: ServiceRequestAnswers, locale: Locale): string {
   const typed = typedBudget(answers);
   if (typed) {
-    return typed.min === typed.max
-      ? `${formatCount(typed.max, locale)}$`
-      : `${formatCount(typed.min, locale)}-${formatCount(typed.max, locale)}$`;
+    const ar = locale === "ar";
+    if (typed.kind === "over") {
+      const bound = formatCount(typed.stated ?? typed.min, locale);
+      return ar ? `أكثر من ${bound}$` : `over $${bound}`;
+    }
+    if (typed.kind === "under") {
+      const bound = formatCount(typed.stated ?? typed.max, locale);
+      return ar ? `أقل من ${bound}$` : `under $${bound}`;
+    }
+    if (typed.min === typed.max) return `${formatCount(typed.max, locale)}$`;
+    return isolateLtr(`${formatCount(typed.min, locale)}-${formatCount(typed.max, locale)}$`, locale);
   }
   if (isBudgetBand(answers.budget)) return optionLabel("BUDGET", answers.budget, locale);
   return "";
@@ -676,26 +731,32 @@ export function serviceRequestEstimate(
   const ar = locale === "ar";
   const result = calculateServiceEstimate(requestPricingInput(answers));
   const contact = contactChannelLines(locale, options.email);
-  const formatRange = ([min, max]: [number, number]) => `~${formatCount(min, locale)}-${formatCount(max, locale)}`;
 
   if (result.service === "ads" && result.resultsKind === "numbers") {
     const reach = result.expectedReach ?? [0, 0];
     const visits = result.expectedVisits ?? [0, 0];
     const leads = result.expectedLeads ?? [0, 0];
     const typed = typedBudget(answers);
-    const budgetLine =
-      typed && typed.min !== typed.max
-        ? `${ar ? "ميزانيتك" : "Your budget"}: ${budgetDisplayText(answers, locale)} ${result.budgetEmoji} ${ar ? `(التقدير محسوب على ${formatCount(result.budgetAmount, locale)}$)` : `(estimate based on ${formatCount(result.budgetAmount, locale)}$)`}`
-        : `${ar ? "ميزانيتك" : "Your budget"}: ${formatCount(result.budgetAmount, locale)}$ ${result.budgetEmoji}`;
+    const plansOn = `${formatCount(result.budgetAmount, locale)}$`;
+    // The budget line always shows the budget the client gave — the pressed
+    // button's own label, or the range / open amount they typed — and never the
+    // planning amount standing in for it («ميزانيتك: 500$» for «200-500$» was
+    // exactly that bug). The planning amount is stated separately whenever the
+    // budget is not a single value.
+    const display = budgetDisplayText(answers, locale) || plansOn;
+    const showsPlan = typed ? typed.kind !== "single" : true;
+    const budgetLine = `${ar ? "ميزانيتك" : "Your budget"}: ${display} ${result.budgetEmoji}${
+      showsPlan ? (ar ? ` (التقدير محسوب على ${plansOn})` : ` (estimate based on ${plansOn})`) : ""
+    }`;
     return [
       budgetLine,
       "",
       `💡 ${ar ? "تغطي" : "Covers"} ${result.estimatedAdDays} ${ar ? "يوم إعلان فعّال" : "active ad days"}`,
       "",
       ar ? "📊 النتائج المتوقعة:" : "📊 Expected results:",
-      ar ? `• الظهور: ${formatRange(reach)}` : `• Impressions: ${formatRange(reach)}`,
-      ar ? `• الزيارات: ${formatRange(visits)}` : `• Visits: ${formatRange(visits)}`,
-      ar ? `• المهتمون: ${formatRange(leads)}` : `• Interested people: ${formatRange(leads)}`,
+      ar ? `• الظهور: ${formatCountRange(reach, locale)}` : `• Impressions: ${formatCountRange(reach, locale)}`,
+      ar ? `• الزيارات: ${formatCountRange(visits, locale)}` : `• Visits: ${formatCountRange(visits, locale)}`,
+      ar ? `• المهتمون: ${formatCountRange(leads, locale)}` : `• Interested people: ${formatCountRange(leads, locale)}`,
       "",
       ...contact,
     ].join("\n");
@@ -711,7 +772,7 @@ export function serviceRequestEstimate(
     ].join("\n");
   }
 
-  const priceRange = `~${formatCount(result.minPrice, locale)}-${formatCount(result.maxPrice, locale)}$`;
+  const priceRange = formatUsdRange(result.minPrice, result.maxPrice, locale);
   return [
     `${ar ? "السعر التقديري" : "Estimated price"}: ${priceRange}`,
     "",
@@ -812,7 +873,10 @@ export function serviceRequestOneLineSummary(answers: ServiceRequestAnswers, loc
       ? ar
         ? "السعر: يحتاج مراجعة"
         : "Price: needs review"
-      : `${ar ? "السعر" : "Price"}: ${formatCount(result.minPrice, locale)}-${formatCount(result.maxPrice, locale)}$`;
+      : `${ar ? "السعر" : "Price"}: ${isolateLtr(
+          `${formatCount(Math.min(result.minPrice, result.maxPrice), locale)}-${formatCount(Math.max(result.minPrice, result.maxPrice), locale)}$`,
+          locale,
+        )}`;
   return [
     `${ar ? "الخدمة" : "Service"}: ${optionLabel("TYPE", answers.type, locale)}`,
     `${ar ? "الحجم" : "Size"}: ${optionLabel("SIZE", answers.size, locale)}`,

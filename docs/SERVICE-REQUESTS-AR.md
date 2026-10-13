@@ -131,10 +131,18 @@
 `0008_service_requests.sql` وتحديث `ofoq_admin_dashboard` ليعدّ `NEW_REQUEST`)،
 ثم `NOTIFY pgrst, 'reload schema';`.
 
+إن كانت الرسالة «تعذر حفظ طلبك ❌ … (service_requests.sql — 0008)» على موقع
+يعمل أصلًا، فالمخطط ناقص هذه الدالة وحدها: طبّق
+`docs/setup/service-requests-migration.sql` (ملف مستقل، آمن لإعادة التشغيل،
+يحتوي الدالة + RLS + الصلاحيات + `NOTIFY pgrst` + تقرير ✓/✗). خطوات التطبيق
+مكتوبة في رأس الملف.
+
 ## الاختبارات
 
 | الملف | ما يغطيه |
 | --- | --- |
+| `tests/service-request-migration-file.test.ts` | ملف التثبيت المستقل: خطوات عربية، توقيع الدالة، RLS، REVOKE/GRANT، `NOTIFY pgrst`، تقرير ✓/✗، ومطابقة الدالة حرفيًا مع 0008 والحزمة |
+| `tests/budget-intent-route.test.ts` | `POST /api/chat/budget-intent`: الصيغ الخمس، القراءة المحلية بلا AI، الميزانية المفتوحة `>500` (المرساة \$1,000) و`<200`، والرجوع إلى الخيارات (`budget: null`) بلا رفض |
 | `tests/service-request-sql-execution.test.ts` | الدالة على PostgreSQL حقيقي (PGlite): DRAFT + `OFOQ-…`، تنبيه NEW_REQUEST/IMPORTANT، واتساب في body/meta، الإشعارات، التكرار، رفض REQUESTED |
 | `tests/service-request-offer.test.ts` | المتجر المحلي: صفّ offers، التنبيه، meta واتساب، البريد، سجل النشاط، `200-500` |
 | `tests/service-request-route.test.ts` | المسار مع عميل Supabase وهمي: RPC الصحيح فقط، لا `ofoq_client_escalate`، أخطاء واضحة |

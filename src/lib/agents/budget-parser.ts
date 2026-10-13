@@ -8,27 +8,38 @@
  *   «200-500$» / «200 إلى 500» → range 200–500
  *   «ميزانيتي 350» / «$300» / «300 دولار» → single value
  *   «300» (only while the budget question itself is open) → single value
+ *   «أكثر من 500» / «فوق 500» → open floor   (>500)
+ *   «أقل من 200»  / «تحت 200»  → open ceiling (<200)
  *
  * Whatever the wording, the result is stored in ONE canonical shape:
  * `{ min, max }` with `min <= max`, rendered as `200-500` (never «500 من 200»),
  * and the planning amount the pricing uses is the upper bound of a range or the
- * single value the client typed.
+ * single value the client typed — or, for an open budget, the published-band
+ * value explained on `openBudgetBounds()`.
  *
  * Pure: no React, no model, no database — unit-tested on its own. When no
  * pattern matches, the caller tries the AI intent layer (`budget-intent.ts`).
  */
-import type { BudgetBand } from "./pricing-agent";
+import { BUDGET_BANDS, type BudgetBand } from "./pricing-agent";
+
+/** The canonical shapes a budget can take: a value, a range, or an open end. */
+export type BudgetKind = "single" | "range" | "over" | "under";
 
 export interface ParsedBudget {
-  /** Lower bound; equals `max` for a single value. */
+  /** Lower bound; equals `max` for a single value, `0` for «أقل من X». */
   min: number;
-  /** Upper bound — the planning amount used by the pricing agent. */
+  /** Upper bound: the single value, the range's top, or the band's ceiling. */
   max: number;
-  kind: "single" | "range";
+  kind: BudgetKind;
   /** Currency named in the message, when any (`USD` for `$`/دولار). */
   currency: "USD" | "IQD" | "OTHER" | null;
-  /** The canonical text stored with the request: `200-500` or `350`. */
+  /** The canonical text stored with the request: `200-500`, `350`, `>500`, `<200`. */
   text: string;
+  /**
+   * The amount the pricing plans on: the single value, a range's upper bound,
+   * or — for an open budget — the value `openBudgetBounds()` derives.
+   */
+  amount: number;
 }
 
 export interface ParseBudgetOptions {
@@ -79,6 +90,35 @@ const COMPACT_RANGE_PATTERN = new RegExp(
   "u",
 );
 
+/**
+ * Open-ended budgets: the client states one end of the budget instead of a
+ * value or a closed range.
+ *
+ *   «أكثر من 500» / «فوق 500» / «500 أو أكثر» / «more than 500» → floor  (>500)
+ *   «أقل من 200»  / «تحت 200»  / «200 أو أقل»  / «less than 200» → ceiling (<200)
+ *
+ * They are matched BEFORE the cued-single patterns: «الميزانية أكثر من 500» is
+ * an open floor, not a $500 budget (which is what reading the bare number used
+ * to produce). The bounds and the planning amount are derived by
+ * `openBudgetBounds()`.
+ */
+const OVER_KEYWORDS = String.raw`أكثر\s*من|اكثر\s*من|أزيد\s*من|ازيد\s*من|فوق|أعلى\s*من|اعلى\s*من|more\s+than|over|above|at\s+least`;
+const UNDER_KEYWORDS = String.raw`أقل\s*من|اقل\s*من|أدنى\s*من|ادنى\s*من|تحت|less\s+than|under|below|at\s+most|up\s+to|no\s+more\s+than`;
+
+const OVER_PATTERNS: RegExp[] = [
+  // «أكثر من 500», «فوق 500 دولار», «more than $500»
+  new RegExp(String.raw`(?:^|[\s(])(?:${OVER_KEYWORDS})\s*\$?\s*${AMOUNT}\s*${CURRENCY}?`, "u"),
+  // «500 أو أكثر», «500 or more»
+  new RegExp(String.raw`(?:^|[^\d.,])\$?\s*${AMOUNT}\s*${CURRENCY}?\s*(?:او|أو|or)\s*(?:أكثر|اكثر|زيادة|more|فوق)`, "u"),
+];
+
+const UNDER_PATTERNS: RegExp[] = [
+  // «أقل من 200», «تحت 200$», «less than $200»
+  new RegExp(String.raw`(?:^|[\s(])(?:${UNDER_KEYWORDS})\s*\$?\s*${AMOUNT}\s*${CURRENCY}?`, "u"),
+  // «200 أو أقل», «200 or less»
+  new RegExp(String.raw`(?:^|[^\d.,])\$?\s*${AMOUNT}\s*${CURRENCY}?\s*(?:او|أو|or)\s*(?:أقل|اقل|less|تحت|أدنى|ادنى)`, "u"),
+];
+
 /** Words that say "this number is my budget". */
 const BUDGET_CUE = String.raw`(?:ميزانيتي|ميزانيتنا|ميزانية|الميزانية|ميزانيه|الميزانيه|budget|بحدود|حدود|حوالي|تقريبا|تقريباً|around|about|approx(?:imately)?|اقدر ادفع|أقدر أدفع|ادفع|أدفع|سادفع|سأدفع|مخصص|خصصت)`;
 
@@ -116,8 +156,52 @@ function detectCurrency(text: string): ParsedBudget["currency"] {
   return null;
 }
 
-/** Canonical text: `200-500` for a range, `350` for a single value. */
-export function formatBudgetRange(budget: { min: number; max: number }): string {
+/**
+ * The bounds of an open-ended budget and the amount it is planned on.
+ *
+ *   - «أكثر من X» (a floor): the published band that starts above X — the band
+ *     the client would have pressed after X. The amount is the MIDPOINT between
+ *     the stated floor and that band's published ceiling, so a floor is never
+ *     planned as if it were the whole budget:
+ *     «أكثر من 500» → band 500-1500 → (500 + 1,500) / 2 = **$1,000**, the
+ *     published $1,000 estimate (185,000–345,000 impressions).
+ *   - «أقل من X» (a ceiling): the band X falls in, planned exactly like its
+ *     button — «أقل من 200» is the «أقل من 200$» button, planned on $200.
+ */
+export function openBudgetBounds(kind: "over" | "under", stated: number): { min: number; max: number; amount: number } {
+  if (kind === "over") {
+    const ceiling = BUDGET_BANDS[budgetBandForAmount(stated + 1)].max;
+    return { min: stated, max: ceiling, amount: Math.round((stated + ceiling) / 2) };
+  }
+  const ceiling = Math.min(stated, BUDGET_BANDS[budgetBandForAmount(stated)].max);
+  return { min: 0, max: ceiling, amount: ceiling };
+}
+
+/** Builds the canonical result of «أكثر من X» / «أقل من X». */
+export function openBudgetFromAmount(
+  kind: "over" | "under",
+  stated: number,
+  currency: ParsedBudget["currency"] = null,
+): ParsedBudget {
+  const bounds = openBudgetBounds(kind, stated);
+  return {
+    ...bounds,
+    kind,
+    currency,
+    text: formatBudgetRange({ ...bounds, kind, stated }),
+  };
+}
+
+/** Canonical text: `200-500`, `350`, `>500` (أكثر من) or `<200` (أقل من). */
+export function formatBudgetRange(budget: {
+  min: number;
+  max: number;
+  kind?: BudgetKind;
+  /** The client's own number of an open budget; defaults to the nearest bound. */
+  stated?: number | null;
+}): string {
+  if (budget.kind === "over") return `>${Math.round(budget.stated ?? budget.min)}`;
+  if (budget.kind === "under") return `<${Math.round(budget.stated ?? budget.max)}`;
   const min = Math.round(Math.min(budget.min, budget.max));
   const max = Math.round(Math.max(budget.min, budget.max));
   return min === max ? String(max) : `${min}-${max}`;
@@ -133,6 +217,7 @@ export function budgetFromAmounts(first: number, second: number | null | undefin
     kind: low === high ? "single" : "range",
     currency,
     text: formatBudgetRange({ min: low, max: high }),
+    amount: high,
   };
 }
 
@@ -167,6 +252,24 @@ export function parseBudgetText(input: string, options: ParseBudgetOptions = {})
     if (first !== null && second !== null) return budgetFromAmounts(first, second, currency);
   }
 
+  // Open-ended budgets before the cued single value: «الميزانية أكثر من 500» is
+  // a floor, not a $500 budget.
+  for (const pattern of OVER_PATTERNS) {
+    const match = pattern.exec(text);
+    if (match) {
+      const floor = toAmount(match[1], match[2]);
+      if (floor !== null) return openBudgetFromAmount("over", floor, currency);
+    }
+  }
+
+  for (const pattern of UNDER_PATTERNS) {
+    const match = pattern.exec(text);
+    if (match) {
+      const ceiling = toAmount(match[1], match[2]);
+      if (ceiling !== null) return openBudgetFromAmount("under", ceiling, currency);
+    }
+  }
+
   for (const pattern of CUED_SINGLE_PATTERNS) {
     const match = pattern.exec(text);
     if (match) {
@@ -192,6 +295,18 @@ export function mentionsNumber(input: string): boolean {
 }
 
 /**
+ * True when a message reads like a budget statement rather than chat: it parses
+ * as a budget, or it names the budget / a currency («ميزانيتي…», «دولار», «$»).
+ *
+ * A bare number is deliberately NOT a statement here: «300» is only a budget
+ * while the budget question itself is open (`bareNumbers`), and a number typed
+ * while the WhatsApp number is expected must stay a phone number.
+ */
+export function isBudgetStatement(input: string): boolean {
+  return parseBudgetText(input) !== null || /ميزاني|الميزانية|budget|دولار|\$|usd/i.test(input);
+}
+
+/**
  * The published budget band an amount falls in. The thresholds are the
  * band labels' upper bounds (≤ 200, ≤ 500, ≤ 1500, above), so the band of a
  * typed amount matches the button the client would have pressed.
@@ -212,7 +327,7 @@ export interface BudgetDetail {
 }
 
 export function budgetDetailFromParsed(parsed: ParsedBudget): BudgetDetail {
-  return { range: parsed.text, amount: parsed.max };
+  return { range: parsed.text, amount: parsed.amount };
 }
 
 /** Parses a stored canonical range (`200-500` / `350`) back into bounds. */
@@ -224,4 +339,46 @@ export function parseBudgetRangeText(value: string | null | undefined): { min: n
   const second = match[2] ? Number(match[2]) : first;
   if (!Number.isFinite(first) || !Number.isFinite(second)) return null;
   return { min: Math.min(first, second), max: Math.max(first, second) };
+}
+
+/**
+ * A stored budget: the canonical text of `answers.budgetRange` (`200-500`,
+ * `350`) or of an open budget (`>500`, `<200`) plus everything derived from it.
+ */
+export interface StoredBudget extends ParsedBudget {
+  /** The client's own number of an open budget («أكثر من 500» → 500); null for closed ones. */
+  stated: number | null;
+  /** The published band the planning amount falls in. */
+  band: BudgetBand;
+}
+
+/**
+ * Reads a stored canonical budget back — including the open forms, whose bounds
+ * and planning amount come from `openBudgetBounds()` and can therefore never
+ * disagree with the ones the parser produced. `null` for anything else.
+ */
+export function parseStoredBudget(value: string | null | undefined): StoredBudget | null {
+  const text = (value ?? "").trim();
+  const open = /^([<>])\s*(\d+)$/.exec(text);
+  if (open) {
+    const kind = open[1] === ">" ? "over" : "under";
+    const stated = Number(open[2]);
+    if (!Number.isFinite(stated) || stated < MIN_BUDGET_AMOUNT || stated > MAX_BUDGET_AMOUNT) return null;
+    const parsed = openBudgetFromAmount(kind, stated);
+    return { ...parsed, stated, band: budgetBandForAmount(parsed.amount) };
+  }
+
+  const bounds = parseBudgetRangeText(text);
+  if (!bounds) return null;
+  const amount = bounds.max;
+  return {
+    min: bounds.min,
+    max: bounds.max,
+    kind: bounds.min === bounds.max ? "single" : "range",
+    currency: null,
+    text: formatBudgetRange(bounds),
+    amount,
+    stated: null,
+    band: budgetBandForAmount(amount),
+  };
 }

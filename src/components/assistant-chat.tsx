@@ -34,7 +34,13 @@ import {
   type ServiceRequestStep,
   type ServiceRequestSubmissionStatus,
 } from "@/lib/agents/service-request";
-import { budgetBandForAmount, budgetDetailFromParsed, mentionsNumber, parseBudgetText } from "@/lib/agents/budget-parser";
+import {
+  budgetBandForAmount,
+  budgetDetailFromParsed,
+  isBudgetStatement,
+  mentionsNumber,
+  parseBudgetText,
+} from "@/lib/agents/budget-parser";
 import type { Locale } from "@/lib/domain/types";
 import { dictionaries } from "@/lib/i18n/dictionaries";
 
@@ -276,7 +282,8 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
       const budget: unknown = payload?.data?.budget;
       if (!budget || typeof budget !== "object") return null;
       const { range, amount } = budget as { range?: unknown; amount?: unknown };
-      if (typeof range !== "string" || !/^\d+(-\d+)?$/.test(range)) return null;
+      // Canonical text: `200-500`, `350`, or an open budget `>500` / `<200`.
+      if (typeof range !== "string" || !/^(?:\d+(?:-\d+)?|[<>]\d+)$/.test(range)) return null;
       if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) return null;
       return { range, amount: Math.round(amount) };
     } catch {
@@ -286,11 +293,12 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
 
   /**
    * Reads a budget out of a typed message: patterns first («من 200 إلى 500»,
-   * «200-500$», «ميزانيتي 350»), then the AI intent. While the budget question
-   * is open a bare number counts and the AI is always asked; at the other steps
+   * «200-500$», «ميزانيتي 350», «أكثر من 500», «أقل من 200»), then the AI
+   * intent. While the budget question is open a bare number counts and the AI
+   * is always asked; at the other steps — including the completed request —
    * only a message that carries a number or budget words is worth an AI call.
    */
-  async function readBudget(message: string, step: ServiceRequestQuestionStep): Promise<BudgetDetail | null> {
+  async function readBudget(message: string, step: ServiceRequestStep | null): Promise<BudgetDetail | null> {
     const bareNumbers = step === "BUDGET";
     const parsed = parseBudgetText(message, { bareNumbers });
     if (parsed) return budgetDetailFromParsed(parsed);
@@ -366,14 +374,11 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
     // A guided request answers through the same composer: typed text is matched
     // against the options of the open question (exact → partial → AI intent).
     if (serviceRequest) {
-      if (serviceRequest.step === "PHONE") {
-        setError("");
-        setInput("");
-        applyPhoneNumber(message);
-        return;
-      }
       const state = serviceRequestState(serviceRequest);
       const openStep = currentQuestionStep(state);
+
+      // A button of the open question can always be answered by typing its id
+      // or either label («under_200», «متوسط», «إعلانات») — before any AI call.
       if (openStep) {
         const step = openStep;
         const typed = matchServiceOption(step, message);
@@ -396,34 +401,52 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
             return;
           }
         }
-        // A budget in free text — the answer to the budget question («300»,
-        // «من 200 إلى 500») or a change of mind later («طيب من 200 إلى 500»
-        // while targeting or the contact channel is open). It updates the
-        // request and the pricing; it is never a rejection and never a message
-        // for the assistant.
-        if (step === "BUDGET" || canReviseBudget(state)) {
-          const budget = await readBudget(message, step);
-          if (budget) {
-            setError("");
-            setInput("");
-            setClarification("");
-            applyTypedBudget(message, budget);
-            return;
-          }
-          if (step === "BUDGET" && mentionsNumber(message)) {
-            // A number we could not read as a budget: ask again with the
-            // options, without sending the message to the assistant.
-            setError("");
-            setInput("");
-            setClarification(serviceRequestClarification(step, locale));
-            return;
-          }
+      }
+
+      // A budget in free text — the answer to the budget question («300»,
+      // «من 200 إلى 500»), a change of mind later («طيب من 200 إلى 500» while
+      // targeting or the contact channel is open), or an edit after the request
+      // was completed («اريد الميزانية أكثر من 500»). It updates the request
+      // and the pricing; it is never a rejection and never a message for the
+      // assistant. While the WhatsApp number is expected, only a clear budget
+      // statement counts, so a bare number stays a phone number.
+      const budgetReadable =
+        openStep === "BUDGET" ||
+        (canReviseBudget(state) && (serviceRequest.step !== "PHONE" || isBudgetStatement(message)));
+      if (budgetReadable) {
+        const budget = await readBudget(message, openStep);
+        if (budget) {
+          setError("");
+          setInput("");
+          setClarification("");
+          applyTypedBudget(message, budget);
+          return;
         }
+        if (openStep === "BUDGET" ? mentionsNumber(message) : isBudgetStatement(message)) {
+          // A budget-looking message neither the patterns nor the AI could
+          // read: show the budget options again. It is never sent to the
+          // assistant — whose only possible answer would be a «cannot confirm
+          // the budget» refusal — and no value is guessed.
+          setError("");
+          setInput("");
+          setClarification(serviceRequestClarification("BUDGET", locale));
+          return;
+        }
+      }
+
+      if (serviceRequest.step === "PHONE") {
+        setError("");
+        setInput("");
+        applyPhoneNumber(message);
+        return;
+      }
+
+      if (openStep) {
         // Nothing matched (and the AI could not extract an intent): show the
         // available options again, save no value, and keep the conversation open.
         setError("");
         setInput("");
-        setClarification(serviceRequestClarification(step, locale));
+        setClarification(serviceRequestClarification(openStep, locale));
         void sendToAssistant(message, { intent: "service_request" });
         return;
       }
