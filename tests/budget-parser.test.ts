@@ -133,3 +133,16 @@ describe("budget details for the request", () => {
     expect(mentionsNumber("بغداد فقط")).toBe(false);
   });
 });
+
+describe("phone numbers", () => {
+  it("recognises a WhatsApp number typed at the wrong moment, so no AI call is made for it", async () => {
+    const { looksLikePhoneNumber } = await import("../src/lib/agents/budget-parser");
+    expect(looksLikePhoneNumber("رقمي 07707048629")).toBe(true);
+    expect(looksLikePhoneNumber("+964 770 704 8629")).toBe(true);
+    expect(looksLikePhoneNumber("٠٧٧٠٧٠٤٨٦٢٩")).toBe(true);
+    expect(looksLikePhoneNumber("009647707048629")).toBe(true);
+    expect(looksLikePhoneNumber("طيب من 200 إلى 500")).toBe(false);
+    expect(looksLikePhoneNumber("ميزانيتي 350")).toBe(false);
+    expect(looksLikePhoneNumber("بغداد فقط")).toBe(false);
+  });
+});

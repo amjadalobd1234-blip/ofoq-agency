@@ -82,6 +82,12 @@ describe("resolveBudgetIntent — hybrid", () => {
     expect(resolution.budget).toMatchObject({ text: "500", min: 500, max: 500 });
   });
 
+  it("does not ask the model about a phone number", async () => {
+    const fetchMock = stubGroq('{"min": 7707048629, "max": 7707048629, "currency": null}');
+    expect(await resolveBudgetIntent("رقمي 07707048629", { bareNumbers: true })).toEqual({ budget: null, source: "none" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("returns no budget — never a guess — when the model finds none", async () => {
     stubGroq('{"min": null, "max": null, "currency": null}');
     expect(await resolveBudgetIntent("بغداد فقط")).toMatchObject({ budget: null, source: "none", provider: "groq" });

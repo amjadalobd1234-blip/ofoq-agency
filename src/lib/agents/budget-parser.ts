@@ -192,6 +192,19 @@ export function mentionsNumber(input: string): boolean {
 }
 
 /**
+ * True when the only numbers in the message form a phone number («رقمي
+ * 07707048629», «+964 770 704 8629»): never a budget, so not worth an AI call
+ * either — the budget patterns already ignore such digits.
+ */
+export function looksLikePhoneNumber(input: string): boolean {
+  const text = normalizeBudgetText(input);
+  if (!/\d/.test(text)) return false;
+  const digits = text.replace(/\D/g, "");
+  const phone = /^(?:00)?(?:964)?0?7\d{9}$/.test(digits) || /^(?:00)?9647\d{9}$/.test(digits);
+  return phone && !/(?:\$|دولار|usd|ميزاني|الميزانية|budget)/.test(text);
+}
+
+/**
  * The published budget band an amount falls in. The thresholds are the
  * band labels' upper bounds (≤ 200, ≤ 500, ≤ 1500, above), so the band of a
  * typed amount matches the button the client would have pressed.

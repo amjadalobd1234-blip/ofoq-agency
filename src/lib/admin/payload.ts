@@ -185,7 +185,7 @@ export interface AdminDashboardTotals {
   urgentAlerts: number;
   /** Alerts that must be handled now (severity = URGENT). Absent on older RPCs. */
   criticalAlerts?: number;
-  /** Open HUMAN_REQUEST / NEW_LEAD alerts raised by the assistant. */
+  /** Open HUMAN_REQUEST / NEW_LEAD / NEW_REQUEST alerts raised by the assistant. */
   newLeads?: number;
 }
 
@@ -239,7 +239,7 @@ export interface AdminDashboardData {
   campaigns: AdminCampaignRow[];
   reports: AdminReportRow[];
   alerts: AdminAlertRow[];
-  /** Open client escalations (HUMAN_REQUEST / NEW_LEAD). Absent on older RPCs. */
+  /** Open client requests (HUMAN_REQUEST / NEW_LEAD / NEW_REQUEST). Absent on older RPCs. */
   leadRequests: AdminAlertRow[];
   agentActions: AdminAgentActionRow[];
   financials: { collected30d: AdminMoneyBucket[]; internalCost30d: AdminMoneyBucket[] };

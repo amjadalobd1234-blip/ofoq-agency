@@ -154,6 +154,8 @@ describe("budget typed as the answer", () => {
     await waitFor(() => expect(shownBodies().at(-1)).toContain("ما قدرت أحدد الخيار"));
     expect(storedContext()).toMatchObject({ step: "BUDGET" });
     expect(postCalls("/api/chat")).toHaveLength(0);
+    // A phone number is not worth an AI round trip either.
+    expect(postCalls("/api/chat/budget-intent")).toHaveLength(0);
 
     type("300");
     await waitFor(() => expect(shownBodies().some((body) => body.includes(QUESTION_AR.TARGETING))).toBe(true));

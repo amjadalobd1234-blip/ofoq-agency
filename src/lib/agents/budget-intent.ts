@@ -19,6 +19,7 @@ import {
   MAX_BUDGET_AMOUNT,
   MIN_BUDGET_AMOUNT,
   budgetFromAmounts,
+  looksLikePhoneNumber,
   normalizeBudgetText,
   parseBudgetText,
   type ParsedBudget,
@@ -129,6 +130,8 @@ export async function resolveBudgetIntent(
 ): Promise<BudgetIntentResolution> {
   const local = parseBudgetText(message, { bareNumbers: options.bareNumbers });
   if (local) return { budget: local, source: "local" };
+  // A WhatsApp number typed at the wrong moment is not a budget; no model needed.
+  if (looksLikePhoneNumber(message)) return { budget: null, source: "none" };
 
   const ai = await extractBudgetIntent(message);
   if (ai.budget) return { budget: ai.budget, source: "ai", provider: ai.provider, model: ai.model };

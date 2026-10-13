@@ -34,7 +34,7 @@ import {
   type ServiceRequestStep,
   type ServiceRequestSubmissionStatus,
 } from "@/lib/agents/service-request";
-import { budgetBandForAmount, budgetDetailFromParsed, mentionsNumber, parseBudgetText } from "@/lib/agents/budget-parser";
+import { budgetBandForAmount, budgetDetailFromParsed, looksLikePhoneNumber, mentionsNumber, parseBudgetText } from "@/lib/agents/budget-parser";
 import type { Locale } from "@/lib/domain/types";
 import { dictionaries } from "@/lib/i18n/dictionaries";
 
@@ -294,6 +294,8 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
     const bareNumbers = step === "BUDGET";
     const parsed = parseBudgetText(message, { bareNumbers });
     if (parsed) return budgetDetailFromParsed(parsed);
+    // A phone number («رقمي 07707048629») is never a budget — no AI round trip.
+    if (looksLikePhoneNumber(message)) return null;
     const budgetTalk = mentionsNumber(message) || /ميزاني|الميزانية|دولار|\$|budget/i.test(message);
     if (!bareNumbers && !budgetTalk) return null;
     setSending(true);
