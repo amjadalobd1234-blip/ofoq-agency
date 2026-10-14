@@ -17,8 +17,9 @@ __pycache__/
 *.pyc
 .cache/
 coverage/
-# User-supplied portraits and fonts must not be published accidentally.
+# Never publish downloaded or user-supplied portraits (PNG and other formats).
 assets/avatars/*
+assets/avatars/*.png
 !assets/avatars/README.md
 assets/fonts/*
 !assets/fonts/README.md

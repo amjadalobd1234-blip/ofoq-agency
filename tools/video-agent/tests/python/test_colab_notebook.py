@@ -16,10 +16,12 @@ from unittest.mock import Mock, patch
 
 # Cell layout of video_agent.ipynb:
 # 0 intro | 1 system check (shell) | 2 clone (python) | 3 system install (shell)
-# 4 node/python/models install (shell) | 5 browser env (python) | 6 parameters | 7 run
-PARAMS_CELL = 6
-RUN_CELL = 7
-BROWSER_CELL = 5
+# 4 node/python/models install (shell) | 5 avatar download (%%bash)
+# 6 browser env (python) | 7 parameters | 8 run
+AVATAR_CELL = 5
+PARAMS_CELL = 7
+RUN_CELL = 8
+BROWSER_CELL = 6
 INSTALL_CELLS = (3, 4)
 
 
@@ -27,7 +29,7 @@ class ColabNotebookTests(unittest.TestCase):
     def setUp(self):
         notebook_path = Path(__file__).resolve().parents[2] / 'video_agent.ipynb'
         self.notebook = json.loads(notebook_path.read_text())
-        self.assertEqual(len(self.notebook['cells']), 8)
+        self.assertEqual(len(self.notebook['cells']), 9)
         self.sources = [''.join(cell['source']) for cell in self.notebook['cells']]
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -70,6 +72,15 @@ class ColabNotebookTests(unittest.TestCase):
                 self.assertTrue(stripped.startswith('!'), f'cell {index} is not shell-only: {line!r}')
                 continuation = stripped.endswith('\\')
 
+    def test_avatar_shell_cell_runs_between_install_and_browser_setup(self):
+        source = self.cell(AVATAR_CELL)
+        self.assertTrue(source.startswith('%%bash\n'))
+        self.assertIn('set -euo pipefail', source)
+        self.assertIn('bash python/download_avatar.sh', source)
+        self.assertIn('ls -la assets/avatars/', source)
+        self.assertLess(INSTALL_CELLS[-1], AVATAR_CELL)
+        self.assertLess(AVATAR_CELL, BROWSER_CELL)
+
     def test_install_cell_installs_chromium(self):
         install = ' '.join(self.cell(index) for index in INSTALL_CELLS)
         self.assertIn('apt-get install -y -qq gfortran ffmpeg chromium-browser', install)
@@ -101,7 +112,7 @@ class ColabNotebookTests(unittest.TestCase):
         after = {key: value for key, value in os.environ.items() if key.startswith(('BROWSER_', 'PUPPETEER_'))}
         self.assertEqual(after, before)
 
-    def test_cell_seven_values_reach_cli_as_literal_arguments(self):
+    def test_parameter_values_reach_cli_as_literal_arguments(self):
         self.scope['DESCRIPTION'] = 'عطر "ذهب"; $(touch unsafe)\n15 ثانية'
         old = self.output / 'old' / 'ad-old.mp4'
         old.parent.mkdir()
