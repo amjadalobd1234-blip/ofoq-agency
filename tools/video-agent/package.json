@@ -1,31 +1,36 @@
 {
   "name": "@ofoq/video-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "أداة أفق المحلية لإنشاء فيديوهات إعلانية من وصف عربي",
+  "description": "Local template \u2192 Piper \u2192 SadTalker \u2192 generated music \u2192 Remotion ad pipeline",
   "type": "module",
-  "engines": { "node": ">=18.0.0" },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "start": "tsx src/index.ts",
     "build": "tsc",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:python": "python3 -m unittest discover -s tests/python -v"
   },
   "dependencies": {
     "@remotion/bundler": "4.0.535",
     "@remotion/cli": "4.0.535",
     "@remotion/renderer": "4.0.535",
     "dotenv": "^16.6.1",
-    "groq-sdk": "0.37.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "remotion": "4.0.535",
     "tsx": "^4.23.0",
-    "typescript": "~5.9.3"
+    "typescript": "~5.9.3",
+    "fluent-ffmpeg": "^2.1.3",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^18.19.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
-    "vitest": "^2.1.9"
+    "vitest": "^2.1.9",
+    "@types/fluent-ffmpeg": "^2.1.28"
   }
 }

@@ -1,0 +1,30 @@
+{
+  "perfume": {
+    "hooks": ["Let your fragrance speak", "A scent that feels like you"],
+    "bodyTemplates": ["{productName} — {benefit}", "Discover {productName}. {benefit}"],
+    "ctas": ["Order now for {price}", "Discover it today"],
+    "defaultProduct": "Your new fragrance", "defaultBenefit": "A finishing touch to your style",
+    "short": {"hook": "Stand out", "body": "Discover {productName}", "cta": "Order now"}
+  },
+  "restaurant": {
+    "hooks": ["Make room for something delicious", "Your next food moment starts here"],
+    "bodyTemplates": ["{productName} — {benefit}", "Discover {productName}. {benefit}"],
+    "ctas": ["Order now for {price}", "Order your meal today"],
+    "defaultProduct": "Our menu", "defaultBenefit": "Share the moment with someone you love",
+    "short": {"hook": "Enjoy", "body": "Try {productName}", "cta": "Order"}
+  },
+  "clothing": {
+    "hooks": ["Make your style your own", "Your next look starts here"],
+    "bodyTemplates": ["{productName} — {benefit}", "Explore {productName}. {benefit}"],
+    "ctas": ["Shop now for {price}", "Explore the collection today"],
+    "defaultProduct": "Our collection", "defaultBenefit": "Details that express your style",
+    "short": {"hook": "Be you", "body": "Explore {productName}", "cta": "Shop"}
+  },
+  "services": {
+    "hooks": ["Your next step starts here", "Let us hear your idea"],
+    "bodyTemplates": ["{productName} — {benefit}", "Discover {productName}. {benefit}"],
+    "ctas": ["Get started for {price}", "Get in touch today"],
+    "defaultProduct": "Our services", "defaultBenefit": "Let us talk about your needs",
+    "short": {"hook": "Start", "body": "Discover {productName}", "cta": "Contact us"}
+  }
+}

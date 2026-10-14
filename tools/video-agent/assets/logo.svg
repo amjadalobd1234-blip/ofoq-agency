@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="160" viewBox="0 0 240 160" role="img" aria-label="أفق">
+  <defs><linearGradient id="gold" x2="1" y2="1"><stop stop-color="#F8E7AF"/><stop offset="1" stop-color="#B78A30"/></linearGradient></defs>
+  <path d="M42 91a78 78 0 0 1 156 0" fill="none" stroke="url(#gold)" stroke-width="8"/>
+  <path d="M24 96h192M55 113h130" stroke="url(#gold)" stroke-width="6" stroke-linecap="round"/>
+  <text x="120" y="153" fill="#FFFFFF" text-anchor="middle" font-family="Arial,sans-serif" font-size="32">أفق</text>
+</svg>

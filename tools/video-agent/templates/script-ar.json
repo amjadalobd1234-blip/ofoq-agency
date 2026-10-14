@@ -1,0 +1,30 @@
+{
+  "perfume": {
+    "hooks": ["عطرك يحكي عنك قبل ما تتكلم", "رائحة تعبّر عنك"],
+    "bodyTemplates": ["{productName} — {benefit}", "مع {productName}، {benefit}"],
+    "ctas": ["اطلبه الآن بـ {price}", "احصل عليه اليوم"],
+    "defaultProduct": "عطرك الجديد", "defaultBenefit": "لمسة تكمّل إطلالتك",
+    "short": {"hook": "تميّز", "body": "اكتشف {productName}", "cta": "اطلبه"}
+  },
+  "restaurant": {
+    "hooks": ["لحظتك الحلوة تبدأ هنا", "جاهز لتجربة جديدة؟"],
+    "bodyTemplates": ["{productName} — {benefit}", "اكتشف {productName}، {benefit}"],
+    "ctas": ["اطلب الآن بـ {price}", "اطلب وجبتك اليوم"],
+    "defaultProduct": "مذاقنا", "defaultBenefit": "شارك لحظاتك مع من تحب",
+    "short": {"hook": "تذوّق", "body": "جرّب {productName}", "cta": "اطلب"}
+  },
+  "clothing": {
+    "hooks": ["إطلالتك تبدأ باختيارك", "خلي أسلوبك يحكي عنك"],
+    "bodyTemplates": ["{productName} — {benefit}", "مع {productName}، {benefit}"],
+    "ctas": ["اطلب الآن بـ {price}", "اكتشف تشكيلتنا اليوم"],
+    "defaultProduct": "تشكيلتنا", "defaultBenefit": "تفاصيل تعبّر عن أسلوبك",
+    "short": {"hook": "تألّق", "body": "اكتشف {productName}", "cta": "تسوّق"}
+  },
+  "services": {
+    "hooks": ["خطوتك الجاية تبدأ هنا", "خلّينا نسمع فكرتك"],
+    "bodyTemplates": ["{productName} — {benefit}", "اكتشف {productName}، {benefit}"],
+    "ctas": ["ابدأ الآن بـ {price}", "تواصل معنا اليوم"],
+    "defaultProduct": "خدماتنا", "defaultBenefit": "لنتحدث عن احتياجاتك",
+    "short": {"hook": "ابدأ", "body": "اكتشف {productName}", "cta": "تواصل"}
+  }
+}
