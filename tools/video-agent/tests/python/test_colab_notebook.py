@@ -17,11 +17,12 @@ from unittest.mock import Mock, patch
 # Cell layout of video_agent.ipynb:
 # 0 intro | 1 system check (shell) | 2 clone (python) | 3 system install (shell)
 # 4 node/python/models install (shell) | 5 avatar download (%%bash)
-# 6 browser env (python) | 7 parameters | 8 run
+# 6 SadTalker full setup | 7 browser env (python) | 8 parameters | 9 run
 AVATAR_CELL = 5
-PARAMS_CELL = 7
-RUN_CELL = 8
-BROWSER_CELL = 6
+SADTALKER_CELL = 6
+BROWSER_CELL = 7
+PARAMS_CELL = 8
+RUN_CELL = 9
 INSTALL_CELLS = (3, 4)
 
 
@@ -29,7 +30,7 @@ class ColabNotebookTests(unittest.TestCase):
     def setUp(self):
         notebook_path = Path(__file__).resolve().parents[2] / 'video_agent.ipynb'
         self.notebook = json.loads(notebook_path.read_text())
-        self.assertEqual(len(self.notebook['cells']), 9)
+        self.assertEqual(len(self.notebook['cells']), 10)
         self.sources = [''.join(cell['source']) for cell in self.notebook['cells']]
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -54,12 +55,13 @@ class ColabNotebookTests(unittest.TestCase):
         return self.sources[index]
 
     def run_cell(self):
-        with patch.dict('sys.modules', self.modules), contextlib.redirect_stdout(io.StringIO()):
+        with patch.dict(os.environ), patch.dict('sys.modules', self.modules), contextlib.redirect_stdout(io.StringIO()):
             exec(self.sources[RUN_CELL], self.scope)
 
     def test_no_cell_mixes_shell_magics_with_python_blocks(self):
-        # A magic inside an indented block raises IndentationError in Jupyter.
         for index, source in enumerate(self.sources):
+            if index == SADTALKER_CELL:
+                continue
             for line in source.splitlines():
                 self.assertIsNone(re.match(r'^\s+[!%]', line), f'cell {index} mixes shell with Python: {line!r}')
         for index in INSTALL_CELLS:
@@ -80,6 +82,19 @@ class ColabNotebookTests(unittest.TestCase):
         self.assertIn('ls -la assets/avatars/', source)
         self.assertLess(INSTALL_CELLS[-1], AVATAR_CELL)
         self.assertLess(AVATAR_CELL, BROWSER_CELL)
+
+    def test_sadtalker_cell_installs_models_and_isolated_venv(self):
+        source = self.cell(SADTALKER_CELL)
+        self.assertLess(INSTALL_CELLS[-1], SADTALKER_CELL)
+        self.assertLess(SADTALKER_CELL, PARAMS_CELL)
+        self.assertIn('SADTALKER_DIR = "/content/SadTalker"', source)
+        self.assertIn('!git clone https://github.com/OpenTalker/SadTalker.git {SADTALKER_DIR}', source)
+        self.assertIn('!cd {SADTALKER_DIR} && pip install -q -r requirements.txt', source)
+        self.assertIn('!pip install -q gdown', source)
+        self.assertIn('!cd {SADTALKER_DIR} && bash scripts/download_models.sh', source)
+        self.assertIn('!python -m venv {SADTALKER_DIR}/.venv-sadtalker', source)
+        self.assertIn('!{SADTALKER_DIR}/.venv-sadtalker/bin/pip install -q -r {SADTALKER_DIR}/requirements.txt', source)
+        self.assertIn('print("✅ SadTalker جاهز")', source)
 
     def test_install_cell_installs_chromium(self):
         install = ' '.join(self.cell(index) for index in INSTALL_CELLS)
@@ -138,9 +153,29 @@ class ColabNotebookTests(unittest.TestCase):
         self.assertEqual(kwargs['stdin'], subprocess.DEVNULL)
         self.assertFalse(kwargs.get('shell', False))
         self.assertEqual(kwargs['env']['OUTPUT_DIR'], str(self.output))
+        self.assertEqual(kwargs['env']['SADTALKER_DIR'], '/content/SadTalker')
+        self.assertEqual(kwargs['env']['AVATAR_MODE'], 'sadtalker')
         self.assertGreater(kwargs['timeout'], 0)
         self.video.assert_called_once_with(str(new), embed=True)
         self.display.assert_called_once_with(self.video.return_value)
+
+    def test_run_cell_falls_back_to_auto_mode_when_sadtalker_fails(self):
+        new = self.output / 'new' / 'ad-new.mp4'
+        modes = []
+
+        def fake_run(command, **kwargs):
+            mode = kwargs['env'].get('AVATAR_MODE')
+            modes.append(mode)
+            if mode == 'sadtalker':
+                return subprocess.CompletedProcess(command, 1, stdout='', stderr='SadTalker OOM')
+            new.parent.mkdir()
+            new.touch()
+            return subprocess.CompletedProcess(command, 0, stdout='fallback generated', stderr='')
+
+        with patch('subprocess.run', side_effect=fake_run):
+            self.run_cell()
+        self.assertEqual(modes, ['sadtalker', 'auto'])
+        self.video.assert_called_once_with(str(new), embed=True)
 
     def test_failed_command_never_displays_stale_video(self):
         old = self.output / 'old' / 'ad-old.mp4'

@@ -40,6 +40,8 @@ describe('independent local package', () => {
     const env = readFileSync(path.join(toolRoot, '.env.example'), 'utf8');
     expect(env).not.toContain('API_KEY');
     expect(env).toContain('TTS_ENGINE=piper');
+    expect(env).toContain('SADTALKER_DIR=/content/SadTalker');
+    expect(env).toContain('AVATAR_MODE=sadtalker');
   });
   it('leaves the browser path empty for auto-detection and matches voice language', () => {
     // An empty value lets src/browser.ts detect Chromium instead of failing at startup.

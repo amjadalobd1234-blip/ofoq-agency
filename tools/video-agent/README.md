@@ -16,12 +16,12 @@ Pipeline مستقل داخل هذا المجلد، يعمل من Terminal:
 4. اختر: `tools/video-agent/video_agent.ipynb`
 5. Runtime → Change runtime type → **T4 GPU**
 6. شغّل كل الخلايا (Runtime → Run all)
-7. عدّل الوصف في الخلية 8
-8. شغّل الخلية 9
+7. عدّل الوصف في الخلية 9
+8. شغّل الخلية 10
 
 **الوقت المستهدف:** 5–8 دقائق للفيديو؛ تقدير غير مُتحقَّق على Colab، ولا يشمل بالضرورة التثبيت وتنزيل النماذج. توافر GPU المجاني وحدود الجلسة تخضع لخدمة Colab.
 
-الـ[Notebook](video_agent.ipynb) مستقل عن كود الأداة ويحتوي على تسع خلايا. تُحفظ الملفات داخل جلسة Colab؛ يمكن تنزيلها من لوحة Files داخل `tools/video-agent/output/`. نزّل النتائج قبل انتهاء الجلسة، ثم أعد تشغيل الخلايا عند بدء جلسة جديدة. التشغيل هنا على خوادم Colab، وليس على جهازك المحلي.
+الـ[Notebook](video_agent.ipynb) مستقل عن كود الأداة ويحتوي على عشر خلايا. تُحفظ الملفات داخل جلسة Colab؛ يمكن تنزيلها من لوحة Files داخل `tools/video-agent/output/`. نزّل النتائج قبل انتهاء الجلسة، ثم أعد تشغيل الخلايا عند بدء جلسة جديدة. التشغيل هنا على خوادم Colab، وليس على جهازك المحلي.
 
 ترتيب الخلايا وفصل الأنواع مهم:
 
@@ -32,11 +32,59 @@ Pipeline مستقل داخل هذا المجلد، يعمل من Terminal:
 | 4 | shell | `apt-get install -y -qq gfortran ffmpeg chromium-browser` |
 | 5 | shell | `npm install` وpip ونماذج Piper |
 | 6 | shell (`%%bash`) | تنزيل الصورة الافتراضية من Unsplash إن فُقدت أو كانت فارغة، دون استبدال صورتك؛ فشل التنزيل يوقف الخلية |
-| 7 | Python | كشف المتصفح وضبط `BROWSER_EXECUTABLE` و`PUPPETEER_EXECUTABLE_PATH` |
-| 8 | Python | وصف الإعلان والقالب |
-| 9 | Python | تشغيل `npm start` وعرض الفيديو |
+| 7 | Colab (SadTalker) | استنساخ SadTalker إلى `/content/SadTalker`، تحميل النماذج (~2 GB)، وإنشاء `.venv-sadtalker` |
+| 8 | Python | كشف المتصفح وضبط `BROWSER_EXECUTABLE` و`PUPPETEER_EXECUTABLE_PATH` |
+| 9 | Python | وصف الإعلان والقالب |
+| 10 | Python | ضبط `SADTALKER_DIR` و`AVATAR_MODE` وتشغيل `npm start` وعرض الفيديو |
 
-لا تُدرج أوامر `!` داخل خلية Python ولا داخل بلوكات مفكوكة المسافة البادئة؛ الخلط بينهما ينتج `IndentationError`. الخلية 7 تضبط متغيرات المتصفح قبل الوصول إلى الخلية 9، والأداة تكشف المتصفح تلقائيًا إن لم تُضبط.
+الخلية 8 تضبط متغيرات المتصفح قبل الوصول إلى الخلية 10، والأداة تكشف المتصفح تلقائيًا إن لم تُضبط.
+
+## SadTalker Setup الكامل
+
+> **⚠️ تحذير:** يحتاج SadTalker إلى **~4 GB RAM** على الأقل أثناء التثبيت والتشغيل، وحجم النماذج **~2 GB**.
+>
+> - **وقت التثبيت:** 15-25 دقيقة في Google Colab.
+> - **احتمال الفشل في Colab المجاني:** قد يفشل التثبيت أو الاستدلال في Colab المجاني بسبب نفاد الذاكرة (RAM).
+> - **الوضع الاحتياطي (Fallback):** في حال فشل SadTalker (بسبب الذاكرة أو عدم اكتمال التثبيت)، تتحوّل الأداة تلقائيًا إلى الوضع `AVATAR_MODE=auto` لتوليد فيديو الشخص من الصورة الثابتة دون توقف الـPipeline بالكامل.
+
+خطوات التثبيت الكامل في Colab (الخلية 7):
+
+```python
+# تثبيت SadTalker
+import os
+
+SADTALKER_DIR = "/content/SadTalker"
+
+# استنساخ SadTalker
+if not os.path.exists(SADTALKER_DIR):
+    !git clone https://github.com/OpenTalker/SadTalker.git {SADTALKER_DIR}
+
+# تثبيت المكتبات
+!cd {SADTALKER_DIR} && pip install -q -r requirements.txt
+
+# تثبيت gdown للتحميل
+!pip install -q gdown
+
+# تحميل النماذج (2 GB)
+!cd {SADTALKER_DIR} && bash scripts/download_models.sh
+
+# إنشاء venv للعزل
+!python -m venv {SADTALKER_DIR}/.venv-sadtalker
+!{SADTALKER_DIR}/.venv-sadtalker/bin/pip install -q -r {SADTALKER_DIR}/requirements.txt
+
+print("✅ SadTalker جاهز")
+```
+
+وفي خلية التشغيل (الخلية 10) تُضبط المتغيرات:
+
+```python
+os.environ["SADTALKER_DIR"] = SADTALKER_DIR
+os.environ["AVATAR_MODE"] = "sadtalker"
+```
+
+تتحقق `src/avatar.ts` من وجود `${SADTALKER_DIR}/.venv-sadtalker/bin/python` قبل التشغيل:
+- إذا كان `AVATAR_MODE=sadtalker` والبيئة غير موجودة، تعرض رسالة خطأ واضحة تتضمن خطوات التثبيت الكاملة.
+- إذا فشل تشغيل SadTalker أثناء التوليد (أو كان `AVATAR_MODE=auto`)، يتم التراجع تلقائيًا (fallback) إلى الوضع `auto`.
 
 > **حالة التوافق:** الخلايا توثّق وصفة Colab المطلوبة، لكنها ليست مسارًا مكتملًا لتوليد فيديو بضغطة واحدة مع الإصدار الحالي. لم يُجرَ اختبار GPU أو توليد فيديو فعلي على Colab. قبل الاعتماد عليها، يلزم معالجة الآتي:
 >
@@ -118,9 +166,10 @@ cp /path/to/approved-portrait.png assets/avatars/man-1.png
 | `TTS_RATE` | `1.0`؛ بين 0.5 و2، وقد تُسرّع المقاطع لتناسب المشهد |
 | `TTS_MODEL_DIR` | `models/piper` |
 | `AVATAR_ENGINE` | `sadtalker` فقط |
+| `AVATAR_MODE` | `sadtalker` (الافتراضي) أو `auto` (للتحويل التلقائي عند غياب/فشل SadTalker) |
 | `DEFAULT_AVATAR` | `assets/avatars/man-1.png` |
-| `SADTALKER_DIR` | `vendor/SadTalker` |
-| `SADTALKER_PYTHON` | `.venv-sadtalker/bin/python` |
+| `SADTALKER_DIR` | `/content/SadTalker` في Colab أو `vendor/SadTalker` محليًا |
+| `SADTALKER_PYTHON` | `.venv-sadtalker/bin/python` (يُفحص داخل `SADTALKER_DIR` أولًا ثم مجلد الأداة) |
 | `AVATAR_DEVICE` | `cpu` أو `cuda` |
 | `PYTHON_BIN` | `python3` من البيئة المفعّلة، أو `.venv/bin/python` |
 | `BROWSER_EXECUTABLE` | مسار Chrome/Chromium الموجود فعليًا على جهازك؛ **اختياري** — تُكتشف المسارات المعروفة تلقائيًا عند تركه فارغًا |
