@@ -16,26 +16,40 @@ Pipeline مستقل داخل هذا المجلد، يعمل من Terminal:
 4. اختر: `tools/video-agent/video_agent.ipynb`
 5. Runtime → Change runtime type → **T4 GPU**
 6. شغّل كل الخلايا (Runtime → Run all)
-7. عدّل الوصف في الخلية 5
-8. شغّل الخلية 6
+7. عدّل الوصف في الخلية 7
+8. شغّل الخلية 8
 
 **الوقت المستهدف:** 5–8 دقائق للفيديو؛ تقدير غير مُتحقَّق على Colab، ولا يشمل بالضرورة التثبيت وتنزيل النماذج. توافر GPU المجاني وحدود الجلسة تخضع لخدمة Colab.
 
-الـ[Notebook](video_agent.ipynb) مستقل عن كود الأداة ويحتوي على الخلايا الست المطلوبة. تُحفظ الملفات داخل جلسة Colab؛ يمكن تنزيلها من لوحة Files داخل `tools/video-agent/output/`. نزّل النتائج قبل انتهاء الجلسة، ثم أعد تشغيل الخلايا عند بدء جلسة جديدة. التشغيل هنا على خوادم Colab، وليس على جهازك المحلي.
+الـ[Notebook](video_agent.ipynb) مستقل عن كود الأداة ويحتوي على الخلايا الثماني المطلوبة. تُحفظ الملفات داخل جلسة Colab؛ يمكن تنزيلها من لوحة Files داخل `tools/video-agent/output/`. نزّل النتائج قبل انتهاء الجلسة، ثم أعد تشغيل الخلايا عند بدء جلسة جديدة. التشغيل هنا على خوادم Colab، وليس على جهازك المحلي.
+
+ترتيب الخلايا وفصل الأنواع مهم:
+
+| الخلية (1-based) | النوع | المحتوى |
+| --- | --- | --- |
+| 2 | shell | فحص GPU وffmpeg وPython وNode |
+| 3 | Python | استنساخ/تحديث المستودع |
+| 4 | shell | `apt-get install -y -qq gfortran ffmpeg chromium-browser` |
+| 5 | shell | `npm install` وpip ونماذج Piper |
+| 6 | Python | كشف المتصفح وضبط `BROWSER_EXECUTABLE` و`PUPPETEER_EXECUTABLE_PATH` |
+| 7 | Python | وصف الإعلان والقالب |
+| 8 | Python | تشغيل `npm start` وعرض الفيديو |
+
+لا تُدرج أوامر `!` داخل خلية Python ولا داخل بلوكات مفكوكة المسافة البادئة؛ الخلط بينهما ينتج `IndentationError`. الخلية 6 تضبط متغيرات المتصفح قبل الوصول إلى الخلية 8، والأداة تكشف المتصفح تلقائيًا إن لم تُضبط.
 
 > **حالة التوافق:** الخلايا توثّق وصفة Colab المطلوبة، لكنها ليست مسارًا مكتملًا لتوليد فيديو بضغطة واحدة مع الإصدار الحالي. لم يُجرَ اختبار GPU أو توليد فيديو فعلي على Colab. قبل الاعتماد عليها، يلزم معالجة الآتي:
 >
 > - يلزم إعداد SadTalker ونماذجه في بيئة Python 3.10 منفصلة وفق قسم التثبيت أدناه؛ تثبيت Torch في بيئة Colab وحدها لا يكفي. الافتراضي `AVATAR_DEVICE=cpu`؛ اختيار T4 في Colab لا يفعّل CUDA داخل الأداة تلقائيًا.
-> - يلزم توفير صورة مصرّح باستخدامها ومتصفح Chrome/Chromium وضبط مساره وخط عربي، وفق المتطلبات أدناه.
+> - يلزم توفير صورة مصرّح باستخدامها ومتصفح Chrome/Chromium وضبط مساره وخط عربي، وفق المتطلبات أدناه. الخلية 4 تثبّت `chromium-browser`، والخلية 6 تضبط مساره إن وُجد.
 >
-> الخلية 6 تمرّر قيم الخلية 5 عبر arguments في وضع غير تفاعلي، وتتوقف عند فشل الأمر، وتعرض الفيديو النهائي الجديد فقط من المجلد الفرعي للتشغيل. تنزيل Piper في الخلية 4 يستخدم المسار الافتراضي `models/piper`. تراخيص المكوّنات والنماذج المذكورة أعلاه تظل سارية على Colab.
+> الخلية 8 تمرّر قيم الخلية 7 عبر arguments في وضع غير تفاعلي، وتتوقف عند فشل الأمر، وتعرض الفيديو النهائي الجديد فقط من المجلد الفرعي للتشغيل. تنزيل Piper في الخلية 5 يستخدم المسار الافتراضي `models/piper`. تراخيص المكوّنات والنماذج المذكورة أعلاه تظل سارية على Colab.
 
 ## 1. المتطلبات
 
 - Node.js **18+** وnpm؛ يُفضّل Node.js 22 LTS أو أحدث مدعوم.
 - Python **3.10–3.12** لبيئة Piper والموسيقى؛ **Python 3.10 منفصل** لـSadTalker بسبب اعتمادياته القديمة. ليست جميع إصدارات Python المستقبلية متوافقة مع هذه الإصدارات المثبّتة.
 - FFmpeg وFFprobe مثبتان محليًا ومتاحان في PATH.
-- Chrome/Chromium مثبت محليًا؛ حدّد ملفه التنفيذي في `BROWSER_EXECUTABLE`. عدم وجوده يوقف العملية، ولا يبدأ تنزيلًا تلقائيًا.
+- Chrome/Chromium **مثبت محليًا على النظام**. تُكتشف الأداة تلقائيًا بالترتيب: `PUPPETEER_EXECUTABLE_PATH` ثم `BROWSER_EXECUTABLE` ثم المسارات المعروفة (`/usr/bin/chromium-browser` و`/usr/bin/chromium` و`/usr/bin/google-chrome` و`/usr/bin/google-chrome-stable`). عدم العثور على متصفح يوقف العملية برسالة واضحة، ولا يبدأ تنزيلًا تلقائيًا. راجع [قسم المتصفح](#المتصفح-chromiumchrome) و[استكشاف الأخطاء](#8-استكشاف-الأخطاء).
 - مساحة كافية للنماذج وبيئتي Python (عدة GB). CPU مدعوم لكنه قد يكون بطيئًا جدًا. NVIDIA GPU/CUDA اختياري ويتطلب نسخة PyTorch متوافقة.
 - صورة أمامية واضحة لشخص واحد، بترخيص وموافقة على الإعلان المتحرك.
 - خط نظام يدعم العربية، مثل Noto Sans Arabic، أو ملف WOFF2 مرخّص محلي.
@@ -104,7 +118,7 @@ assets/avatars/man-1.png
 | `SADTALKER_PYTHON` | `.venv-sadtalker/bin/python` |
 | `AVATAR_DEVICE` | `cpu` أو `cuda` |
 | `PYTHON_BIN` | `python3` من البيئة المفعّلة، أو `.venv/bin/python` |
-| `BROWSER_EXECUTABLE` | مسار Chrome/Chromium الموجود فعليًا على جهازك |
+| `BROWSER_EXECUTABLE` | مسار Chrome/Chromium الموجود فعليًا على جهازك؛ **اختياري** — تُكتشف المسارات المعروفة تلقائيًا عند تركه فارغًا |
 | `FFMPEG_PATH` / `FFPROBE_PATH` | `ffmpeg` / `ffprobe`، أو مساراتهما المطلقة |
 | `OUTPUT_DIR` | `output/` |
 | `FPS` | `30` (24–60) |
@@ -112,7 +126,42 @@ assets/avatars/man-1.png
 | `TEMPLATE_LANG` | `ar` أو `en` |
 | `FONT_FILE` | اختياري: `assets/fonts/font.woff2` |
 
-المسارات النسبية تُحسب من مجلد الأداة، لا من مجلد Terminal. عدّل `BROWSER_EXECUTABLE` قبل التشغيل؛ `/usr/bin/chromium` مجرد مثال لنظام Linux. على macOS قد يكون `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`.
+المسارات النسبية تُحسب من مجلد الأداة، لا من مجلد Terminal. عدّل `BROWSER_EXECUTABLE` قبل التشغيل إن كان متصفحك في مسار غير مألوف؛ `/usr/bin/chromium` مجرد مثال لنظام Linux. على macOS قد يكون `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`.
+
+### المتصفح (Chromium/Chrome)
+
+Remotion يصيير الإعلان داخل Chrome/Chromium. الأداة لا تنزّل متصفحًا أبدًا: إما أن تجد واحدًا مثبتًا، أو تتوقف برسالة توضّح كيفية تثبيته.
+
+ترتيب الكشف (أول مسار موجود يُستخدم):
+
+1. `PUPPETEER_EXECUTABLE_PATH`
+2. `BROWSER_EXECUTABLE`
+3. `/usr/bin/chromium-browser`
+4. `/usr/bin/chromium`
+5. `/usr/bin/google-chrome`
+6. `/usr/bin/google-chrome-stable`
+
+إذا ضُبط متغير من المتغيرين الأولين على مسار غير موجود، تتوقف العملية فورًا برسالة تذكر المتغير والمسار والمتصفحات المكتشفة على الجهاز — ولا تنتقل بصمت إلى مسار آخر. وإذا لم يُضبط أي متغير ولم يُعثر على متصفح، تسرد الرسالة كل المسارات التي جرى فحصها.
+
+```sh
+# Debian/Ubuntu
+sudo apt-get update && sudo apt-get install -y chromium-browser
+# Google Colab
+!apt-get install -y -qq chromium-browser
+# macOS
+brew install --cask google-chrome
+
+# أو حدّد المسار يدويًا
+BROWSER_EXECUTABLE=/usr/bin/chromium npm start
+```
+
+تحقّق سريع من المتصفح وffmpeg دون تشغيل Pipeline كامل:
+
+```sh
+npm run doctor
+```
+
+يستخدم `doctor` حزمة `puppeteer-core` لقيادة Chromium المثبّت على النظام فقط (لا تنزيل)، ويطبع مسار المتصفح وإصداره بعد التحقق من `ffmpeg` و`ffprobe`.
 
 للإنجليزية، نزّل صوتها مرة واحدة ثم اضبط `TEMPLATE_LANG=en` و`TTS_VOICE` المطابق:
 
@@ -222,7 +271,9 @@ bash -n python/setup_models.sh
 - `build`: فحص TypeScript دون إصدار ملفات؛ التشغيل عبر `tsx`.
 - اختبارات CLI: تحليل arguments، عدم فتح readline في الوضع غير التفاعلي، وصول معلومات المنتج إلى السيناريو، والحفاظ على الوضع التفاعلي. اختبارات subprocess تشغّل `npm start -- ...` فعلًا مع مهلة زمنية وتتحقق من الخروج غير الصفري عند نقص الوصف أو خطأ القالب أو غياب النماذج؛ لا تولّد فيديو حقيقيًا.
 - اختبارات Node داخل `tests/`: الحزم، القوالب، المدد، إعدادات البيئة، command builders، pipeline مع mocks، Remotion وتجهيز الأصول والتنظيف.
-- اختبارات Python داخل `tests/python/`: **توليد WAV حقيقي** واختبار قنواته ومدته ومستواه، توقيت الصوت، أوامر FFmpeg/SadTalker وحماية الاتصال. اختبارات Notebook تنفّذ نص الخليتين 5 و6 مع محاكاة subprocess والعرض، وتتحقق من تمرير القيم حرفيًا ومنع عرض فيديو قديم عند الفشل؛ ليست اختبار Run All على Colab.
+- `tests/browser.test.ts`: كشف المتصفح بالترتيب الصحيح (`PUPPETEER_EXECUTABLE_PATH` ← `BROWSER_EXECUTABLE` ← المسارات المعروفة)، حل المسارات النسبية من مجلد الأداة، ورسائل الخطأ الواضحة عند مسار مضبوط غير موجود أو عند غياب أي متصفح. كلها تعمل عبر دالة فحص محقونة (mock paths) فلا تحتاج Chrome حقيقيًا، باستثناء حالة واحدة تنشئ ملفًا تنفيذيًا مؤقتًا وتتحقق من كشفه فعليًا على القرص.
+- `tests/doctor.test.ts`: تشغيل المتصفح المكتشف عبر `puppeteer-core` بمحاكاة، وإغلاقه حتى عند فشل الفحص.
+- اختبارات Python داخل `tests/python/`: **توليد WAV حقيقي** واختبار قنواته ومدته ومستواه، توقيت الصوت، أوامر FFmpeg/SadTalker وحماية الاتصال. اختبارات Notebook تتحقق من فصل خلايا shell عن خلايا Python ومن تثبيت `chromium-browser` ومن ضبط متغيرات المتصفح قبل خلية التشغيل، ثم تنفّذ نص خليتي الوصف والتشغيل مع محاكاة subprocess والعرض، وتتحقق من تمرير القيم حرفيًا ومنع عرض فيديو قديم عند الفشل؛ ليست اختبار Run All على Colab.
 - لا تنزّل الاختبارات نماذج، ولا تستدعي Piper أو SadTalker فعليًا، ولا تشغّل Chrome أو render حقيقيًا.
 - `.github/workflows/video-agent-test.yml` يشغّل هذه الاختبارات على كل PR باستخدام Node وPython، دون Torch أو SadTalker. GitHub Actions خدمة CI فقط وليست جزءًا من تشغيل الإعلان. يمكنك تشغيل الأوامر نفسها داخل Codespace أو على جهازك.
 
@@ -231,6 +282,7 @@ bash -n python/setup_models.sh
 ## 7. أخطاء شائعة
 
 - **ملف مفقود:** أكمل الإعداد، وضع الصورة، واضبط مسار المتصفح. تتوقف الأداة قبل التوليد بدل تنزيل شيء دون علمك.
+- **المتصفح غير مثبت أو غير مكتشف:** راجع [قسم المتصفح](#المتصفح-chromiumchrome) و[استكشاف الأخطاء](#8-استكشاف-الأخطاء).
 - **Piper غير موجود:** فعّل `.venv` أو اضبط `PYTHON_BIN`.
 - **تعارض NumPy/Torch/Pillow:** استخدم `.venv-sadtalker` المنفصلة مع Python 3.10، لا Python الموقع أو بيئة Piper.
 - **الصوت لا يناسب المشهد:** اختصر النص/اسم المنتج أو زد المدة.
@@ -238,3 +290,48 @@ bash -n python/setup_models.sh
 - **CUDA غير متاح:** اختر `AVATAR_DEVICE=cpu` أو ثبّت تعريفات/PyTorch المناسبين.
 - **خط عربي غير ظاهر:** ثبّت خطًا عربيًا محليًا أو اضبط WOFF2.
 - **فشل مرحلة:** رمز خروج غير صفري، لا رسالة نجاح وهمية ولا رجوع لخدمة خارجية. احتفظ بسجل الخطأ والملفات الوسيطة للتشخيص.
+
+## 8. استكشاف الأخطاء
+
+### المتصفح: `لم يتم العثور على Chrome/Chromium مثبّت على هذا الجهاز`
+
+لم يُعثر على متصفح في أي مسار مفحوص ولم يُضبط أي متغير بيئة.
+
+```sh
+# Debian/Ubuntu
+sudo apt-get update && sudo apt-get install -y chromium-browser
+which chromium-browser chromium google-chrome google-chrome-stable
+# حدّد المسار يدويًا إن كان في مكان آخر
+BROWSER_EXECUTABLE=/usr/bin/chromium npm start
+```
+
+### المتصفح: `ملف المتصفح المضبوط في BROWSER_EXECUTABLE غير موجود`
+
+المسار مضبوط لكنه غير موجود (مثل نسخ `.env` من جهاز آخر). لا تنتقل الأداة بصمت إلى متصفح آخر: صحّح المسار أو احذف المتغير للسماح بالكشف التلقائي. الرسالة تسرد المتصفحات المكتشفة على الجهاز إن وُجدت.
+
+### المتصفح في Google Colab
+
+الخطأ `invalid_type ... BROWSER_EXECUTABLE` يعني أن المتغير لم يُضبط قبل تشغيل `npm start`. الأسباب الشائعة:
+
+1. **خلية التثبيت لم تكتمل:** شغّل خلية shell التي تحتوي `!apt-get install -y -qq chromium-browser` أولًا.
+2. **ترتيب الخلايا:** شغّل خلية Python (6) التي تضبط `BROWSER_EXECUTABLE` و`PUPPETEER_EXECUTABLE_PATH` قبل خلية التشغيل (8).
+3. **خلط shell مع Python في خلية واحدة** ينتج `IndentationError` ولا تُنفَّذ الخلية أصلًا؛ خلايا shell منفصلة عن خلايا Python في هذا الـNotebook.
+4. **جلسة جديدة:** يعيد Colab تصفير البيئة؛ أعد تشغيل الخلايا بالترتيب.
+
+للتحقق داخل Colab:
+
+```python
+!which chromium-browser chromium google-chrome
+import os
+print(os.environ.get("BROWSER_EXECUTABLE"))
+```
+
+### المتصفح موجود لكنه لا يعمل
+
+شغّل الفحص المخصّص؛ سيحاول تشغيل المتصفح عبر `puppeteer-core` وطباعة إصداره، بعد التحقق من `ffmpeg` و`ffprobe`:
+
+```sh
+npm run doctor
+```
+
+إذا فشل التشغيل، فالمشكلة عادة في مكتبات النظام الناقصة أو في بيئة محكومة (container) تحتاج `--no-sandbox`؛ `doctor` يستخدم هذه الوسيلة مسبقًا. الأداة لا تعدّل إعدادات أمان النظام نيابة عنك.

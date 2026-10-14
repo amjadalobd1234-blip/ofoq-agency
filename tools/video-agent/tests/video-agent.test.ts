@@ -24,8 +24,10 @@ describe('independent local package', () => {
   it('declares dependencies and excludes hosted API clients', () => {
     const pkg = JSON.parse(readFileSync(path.join(toolRoot, 'package.json'), 'utf8'));
     for (const name of ['remotion', '@remotion/cli', '@remotion/bundler', '@remotion/renderer',
-      'fluent-ffmpeg', 'dotenv', 'tsx', 'typescript', 'zod']) expect(pkg.dependencies[name]).toBeTruthy();
-    for (const name of ['groq-sdk', 'openai', 'edge-tts']) expect(pkg.dependencies[name]).toBeUndefined();
+      'fluent-ffmpeg', 'dotenv', 'tsx', 'typescript', 'zod',
+      // puppeteer-core drives the system Chromium; the full puppeteer package downloads one.
+      'puppeteer-core']) expect(pkg.dependencies[name]).toBeTruthy();
+    for (const name of ['groq-sdk', 'openai', 'edge-tts', 'puppeteer']) expect(pkg.dependencies[name]).toBeUndefined();
     for (const name of ['@remotion/cli', '@remotion/bundler', '@remotion/renderer']) {
       expect(pkg.dependencies[name]).toBe(pkg.dependencies.remotion);
     }
@@ -39,8 +41,10 @@ describe('independent local package', () => {
     expect(env).not.toContain('API_KEY');
     expect(env).toContain('TTS_ENGINE=piper');
   });
-  it('requires a local browser and matches voice language', () => {
-    expect(() => loadSettings({})).toThrow();
+  it('leaves the browser path empty for auto-detection and matches voice language', () => {
+    // An empty value lets src/browser.ts detect Chromium instead of failing at startup.
+    expect(loadSettings({}).BROWSER_EXECUTABLE).toBe('');
+    expect(loadSettings({ BROWSER_EXECUTABLE: '/chrome' }).BROWSER_EXECUTABLE).toBe('/chrome');
     expect(() => loadSettings({ BROWSER_EXECUTABLE: '/chrome', TEMPLATE_LANG: 'en' })).toThrow('TTS_VOICE');
     expect(loadSettings({ BROWSER_EXECUTABLE: '/chrome', TEMPLATE_LANG: 'en', TTS_VOICE: 'en_US-lessac-medium' }).TEMPLATE_LANG).toBe('en');
   });

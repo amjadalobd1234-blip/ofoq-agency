@@ -17,7 +17,8 @@ const environment = z.object({
   PYTHON_BIN: z.string().min(1).default('python3'),
   FFMPEG_PATH: z.string().min(1).default('ffmpeg'),
   FFPROBE_PATH: z.string().min(1).default('ffprobe'),
-  BROWSER_EXECUTABLE: z.string().min(1, 'حدّد مسار Chrome/Chromium المحلي في BROWSER_EXECUTABLE.'),
+  // Empty means auto-detect: src/browser.ts scans the env and known system paths at run time.
+  BROWSER_EXECUTABLE: z.string().default(''),
   OUTPUT_DIR: z.string().default('output/'),
   FPS: z.coerce.number().int().min(24).max(60).default(30),
   WIDTH: z.coerce.number().int().min(320).max(2160).multipleOf(2).default(1080),

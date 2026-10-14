@@ -13,7 +13,8 @@ This repository's integration code, templates, and procedural music generator do
 | NumPy / SciPy | BSD-3-Clause and third-party notices. Music here is synthesized procedurally rather than copied from a sample library. |
 | FFmpeg | LGPL/GPL depends on the actual build and enabled codecs; review your distribution and local codec/patent obligations. |
 | fluent-ffmpeg | MIT; upstream package is deprecated/unmaintained. Included as requested, used only for local FFprobe orchestration. |
-| Chrome/Chromium | Local installation has its own distribution/license terms. No browser binary is shipped here. |
+| Chrome/Chromium | Local installation has its own distribution/license terms. No browser binary is shipped here. The tool detects an already installed browser (`PUPPETEER_EXECUTABLE_PATH`, `BROWSER_EXECUTABLE`, or the usual system paths) and never downloads one at runtime. |
+| puppeteer-core | Apache-2.0. Used only by `npm run doctor` to drive the locally installed browser; it downloads no browser binary itself. |
 | Portrait / font / agency logo | Use only assets with appropriate rights. Obtain explicit permission to animate a real person's likeness and use it in an advertisement. Replace the included simple SVG mark with the approved agency logo if required. |
 
 Installation downloads software/weights from third-party repositories. After installation, runtime does not rely on hosted inference, billing APIs, subscriptions to generation services, or API keys. This independence does not eliminate hardware costs, upstream licenses, maintenance, or the need to archive your legally obtained dependencies for long-term reproducibility.
