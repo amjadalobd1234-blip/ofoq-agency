@@ -44,8 +44,8 @@ import { getSupabaseAuthStorageKey, getSupabaseConfig } from "@/lib/supabase/con
  * - `/api/ai/chat` and `/api/chat` — both accept work before a session exists
  *   (the anonymous assistant), so a refresh is unnecessary; each route still
  *   calls `requireSupabaseUser()` itself. The `/api/chat/:path*` sub-routes
- *   (service-intent, service-request) are matched: they exist only for signed-in
- *   clients.
+ *   (step-intent, service-intent, budget-intent, service-request) are matched:
+ *   they exist only for signed-in clients.
  */
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });

@@ -56,6 +56,10 @@ function stubChatApi(): void {
     if (String(url).includes("service-intent")) {
       return Response.json({ data: { optionId: intentOptionId, source: intentOptionId ? "ai" : "none" } });
     }
+    if (String(url).includes("step-intent")) {
+      // No provider in these tests: the step intent layer reads nothing either.
+      return Response.json({ data: { match: null, confidence: null, source: "none" } });
+    }
     if (String(url).includes("service-request")) {
       return Response.json({ data: { orderCode: SERVICE_REQUEST_ORDER_CODE } });
     }

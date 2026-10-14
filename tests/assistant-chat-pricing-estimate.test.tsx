@@ -27,6 +27,7 @@ let saved: SavedMessage[] = [];
 function stubChatApi(): void {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     if (String(url).includes("service-intent")) return Response.json({ data: { optionId: null, source: "none" } });
+    if (String(url).includes("step-intent")) return Response.json({ data: { match: null, confidence: null, source: "none" } });
     if (String(url).includes("service-request")) return Response.json({ data: { orderCode: SERVICE_REQUEST_ORDER_CODE } });
     if (init?.method === "POST") {
       const { message } = JSON.parse(String(init.body)) as { message: string };

@@ -36,7 +36,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
-/** /api/chat, /api/chat/service-intent and /api/chat/service-request, stubbed. */
+/** /api/chat, the two intent routes and /api/chat/service-request, stubbed. */
 function stubChatApi(): void {
   vi.stubGlobal(
     "fetch",
@@ -44,6 +44,9 @@ function stubChatApi(): void {
       if (String(url).includes("service-intent")) {
         // No provider configured in these tests: no intent is extracted.
         return jsonResponse({ data: { optionId: null, source: "none" } });
+      }
+      if (String(url).includes("step-intent")) {
+        return jsonResponse({ data: { match: null, confidence: null, source: "none" } });
       }
       if (String(url).includes("service-request")) {
         return jsonResponse({ data: { orderCode: SERVICE_REQUEST_ORDER_CODE, alertId: "alert-1" } });

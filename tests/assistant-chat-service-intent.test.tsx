@@ -35,6 +35,7 @@ let conversationId = "conv-1";
 function stubChatApi(): void {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     if (String(url).includes("service-intent")) return Response.json({ data: { optionId: null, source: "none" } });
+    if (String(url).includes("step-intent")) return Response.json({ data: { match: null, confidence: null, source: "none" } });
     if (init?.method === "POST") {
       const { message } = JSON.parse(String(init.body)) as { message: string };
       const userMessage: SavedMessage = { id: `m-${saved.length + 1}`, sender: "CLIENT", body: message, language: "ar", createdAt: "2026-10-12T05:01:00.000Z" };

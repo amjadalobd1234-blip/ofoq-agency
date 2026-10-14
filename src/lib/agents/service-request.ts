@@ -15,12 +15,17 @@
  * and product price are no longer asked: delivery is planned as normal, and the
  * number of platforms is derived from the budget.
  *
- * Understanding what the client types happens in three layers:
+ * Understanding what the client types happens in three layers, at EVERY
+ * selection step (TYPE, SIZE, BUDGET, TARGETING, CONTACT):
  *
  *   1. exact match against the option id / Arabic label / English label,
  *   2. partial match for phrases such as «أريد تصميم» or «تصميم شعار»,
- *   3. AI intent extraction (`extractServiceTypeIntent`) when the first two
- *      layers fail — the answer is only accepted when it names a real option.
+ *   3. AI intent extraction when the first two layers fail — the generic
+ *      step layer (`step-intent.ts`, `POST /api/chat/step-intent`) plus the
+ *      specialised TYPE extractor (`extractServiceTypeIntent`). An answer is
+ *      only accepted when it names a real option of the open step AND carries
+ *      a confidence of at least `STEP_INTENT_MIN_CONFIDENCE`; otherwise the
+ *      options are shown again and nothing is saved.
  *
  * Text is normalised first: diacritics removed, hamza forms unified, letter
  * variants folded and repeated spaces collapsed.
@@ -278,6 +283,108 @@ export function matchServiceOption(step: ServiceRequestQuestionStep, text: strin
 /** The TYPE options as id/label pairs — used by the AI intent layer too. */
 export function serviceTypeOptions(): MatchableOption[] {
   return TYPE_OPTIONS.map(toMatchable);
+}
+
+/** The options of any step as id/label pairs — the AI intent layer's choice list. */
+export function serviceRequestMatchableOptions(step: ServiceRequestQuestionStep): MatchableOption[] {
+  return SERVICE_REQUEST_QUESTIONS[step].options.map(toMatchable);
+}
+
+/* ------------------------------------------------- AI intent, every step --- */
+
+/**
+ * Lowest confidence an AI step-intent answer may carry and still be stored.
+ * Below it the client is shown the options again — a guess is never an answer.
+ */
+export const STEP_INTENT_MIN_CONFIDENCE = 0.7;
+
+/**
+ * Ids a model may answer with that stand for a published option of the same
+ * step («site» for the in-app notification, «gcc» for the Gulf, «logo» for
+ * design…). Keys are compared after `normalizeOptionText`, so casing, hamza
+ * forms and letter variants do not matter.
+ *
+ * An alias is only ever used when it resolves to a real option of the step
+ * being asked, so it can never select something unpublished.
+ */
+const STEP_INTENT_ID_ALIASES: Record<string, string> = Object.fromEntries(
+  (
+    [
+      // CONTACT
+      ["site", "website"],
+      ["web", "website"],
+      ["in_app", "website"],
+      ["notification", "website"],
+      ["mail", "email"],
+      ["gmail", "email"],
+      ["e_mail", "email"],
+      ["whats", "whatsapp"],
+      ["whats_app", "whatsapp"],
+      ["phone", "whatsapp"],
+      // TARGETING
+      ["iraq", "iraq_all"],
+      ["all_iraq", "iraq_all"],
+      ["whole_iraq", "iraq_all"],
+      ["baghdad_only", "baghdad"],
+      ["basra_only", "basra"],
+      ["basrah", "basra"],
+      ["three", "three_cities"],
+      ["3_cities", "three_cities"],
+      ["baghdad_basra_erbil", "three_cities"],
+      ["saudi", "gulf"],
+      ["gcc", "gulf"],
+      ["khaleej", "gulf"],
+      ["gulf_countries", "gulf"],
+      ["arabic", "arabic_global"],
+      ["arab_world", "arabic_global"],
+      ["mena", "arabic_global"],
+      // SIZE
+      ["tiny", "small"],
+      ["little", "small"],
+      ["mid", "medium"],
+      ["big", "large"],
+      ["huge", "large"],
+      // TYPE
+      ["logo", "design"],
+      ["branding", "design"],
+      ["advertising", "ads"],
+      ["marketing", "ads"],
+      ["social", "social_media"],
+      ["writing", "content"],
+      ["copywriting", "content"],
+      ["google_seo", "seo"],
+    ] as const
+  ).map(([alias, optionId]) => [normalizeOptionText(alias), optionId]),
+);
+
+/**
+ * The gate every AI step-intent answer passes before it is stored.
+ *
+ * The option is kept only when the step really offers it — after the alias
+ * table and through the same exact/partial matcher a typed message goes
+ * through, so a model that answers with a label («البصرة فقط») is understood
+ * too — and only when it stated a confidence of at least
+ * `STEP_INTENT_MIN_CONFIDENCE`. A missing, unreadable or lower confidence is a
+ * rejection: the caller shows the options again and saves nothing. (A model
+ * answering `95` for 95% still clears the bar; the gate guards weak guesses,
+ * not the unit.)
+ *
+ * Lives here, next to the matcher and free of server imports, so the API route
+ * and the chat component enforce exactly one rule.
+ */
+export function acceptStepIntent(
+  step: ServiceRequestQuestionStep,
+  match: unknown,
+  confidence: unknown,
+  options?: readonly MatchableOption[],
+): string | null {
+  if (typeof match !== "string" || !match.trim()) return null;
+  const stated = typeof confidence === "number" ? confidence : Number(confidence);
+  if (!Number.isFinite(stated) || stated < STEP_INTENT_MIN_CONFIDENCE) return null;
+
+  const list = options ?? SERVICE_REQUEST_QUESTIONS[step].options.map(toMatchable);
+  const alias = STEP_INTENT_ID_ALIASES[normalizeOptionText(match)];
+  return matchOption(alias ?? match, list)?.value ?? matchOption(match, list)?.value ?? null;
 }
 
 export function serviceRequestOption(step: ServiceRequestQuestionStep, optionId: string | undefined): ServiceRequestOption | undefined {
