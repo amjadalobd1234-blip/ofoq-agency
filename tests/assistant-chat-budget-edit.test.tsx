@@ -52,6 +52,7 @@ function stubChatApi(): void {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const path = new URL(String(url), "http://localhost").pathname;
     if (path === "/api/chat/service-intent") return Response.json({ data: { optionId: null, source: "none" } });
+    if (path === "/api/chat/step-intent") return Response.json({ data: { match: null, confidence: null, source: "none" } });
     if (path === "/api/chat/budget-intent") {
       return Response.json({ data: { budget: aiBudget ? { ...aiBudget, min: Number(aiBudget.range.split("-")[0]), max: aiBudget.amount } : null, source: aiBudget ? "ai" : "none", provider: "groq" } });
     }

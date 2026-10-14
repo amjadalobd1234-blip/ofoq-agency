@@ -8,6 +8,7 @@ import {
   SERVICE_REQUEST_QUESTIONS,
   SERVICE_REQUEST_STEPS,
   SERVICE_REQUEST_WELCOME,
+  acceptStepIntent,
   answerServiceRequest,
   budgetUpdatedMessage,
   canReviseBudget,
@@ -194,6 +195,15 @@ export function contactOptionLabel(option: ServiceRequestOption, locale: Locale,
   return `${label}: ${address}`;
 }
 
+/**
+ * True when a message carries a number or budget words — the gate that decides
+ * whether a message is worth an AI call outside the budget question, so a
+ * greeting never costs a completion.
+ */
+export function talksAboutBudget(message: string): boolean {
+  return mentionsNumber(message) || /ميزاني|الميزانية|دولار|\$|budget/i.test(message);
+}
+
 /** Service-request chat using the fixed public pricing table. */
 export function AssistantChat({ locale, intent }: { locale: Locale; intent?: string }) {
   const ar = locale === "ar";
@@ -266,6 +276,41 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
   }
 
   /**
+   * Layer 3 of every selection step: the AI intent layer
+   * (`POST /api/chat/step-intent`). The model is given the step, its published
+   * options and the message, and answers with one option value plus how sure it
+   * is. Only a published option of that step with a confidence of at least
+   * `STEP_INTENT_MIN_CONFIDENCE` is accepted — «بصرا», «أريد أشتغل بالبصرة»,
+   * «بغداد والبصرة», «بريد» and «المكان» are understood this way, and anything
+   * weaker comes back null so the options are shown again instead of guessing.
+   */
+  async function askAiForStepOption(step: ServiceRequestQuestionStep, message: string): Promise<string | null> {
+    try {
+      const response = await fetch("/api/chat/step-intent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          step,
+          message,
+          language: locale,
+          options: SERVICE_REQUEST_QUESTIONS[step].options.map((option) => ({
+            value: option.id,
+            labelAr: option.labelAr,
+            labelEn: option.labelEn,
+          })),
+        }),
+      });
+      if (!response.ok) return null;
+      const payload = await response.json();
+      // The route already gates the answer; the same rule is applied here so a
+      // tampered or stale response can never select an option either.
+      return acceptStepIntent(step, payload?.data?.match, payload?.data?.confidence);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Asks the AI (Groq first) for the budget a message states when the patterns
    * could not read one. The route validates and normalises the answer; anything
    * that is not a sane positive amount or range comes back as null.
@@ -302,8 +347,7 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
     const bareNumbers = step === "BUDGET";
     const parsed = parseBudgetText(message, { bareNumbers });
     if (parsed) return budgetDetailFromParsed(parsed);
-    const budgetTalk = mentionsNumber(message) || /ميزاني|الميزانية|دولار|\$|budget/i.test(message);
-    if (!bareNumbers && !budgetTalk) return null;
+    if (!bareNumbers && !talksAboutBudget(message)) return null;
     setSending(true);
     try {
       return await askAiForBudget(message, bareNumbers);
@@ -381,6 +425,7 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
       // or either label («under_200», «متوسط», «إعلانات») — before any AI call.
       if (openStep) {
         const step = openStep;
+        // Layers 1+2: the rules — an exact match, then a partial one.
         const typed = matchServiceOption(step, message);
         if (typed) {
           setError("");
@@ -389,9 +434,14 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
           chooseServiceOption(typed);
           return;
         }
-        if (step === "TYPE") {
+        // Layer 3: the AI intent layer. BUDGET is answered further down, where
+        // the budget patterns and the amount reader get the message first.
+        if (step !== "BUDGET") {
           setSending(true);
-          const aiOption = await askAiForServiceType(message);
+          // TYPE keeps its specialised extractor (a richer synonym prompt); the
+          // generic step layer is the second opinion every step gets.
+          const aiOption =
+            (step === "TYPE" ? await askAiForServiceType(message) : null) ?? (await askAiForStepOption(step, message));
           setSending(false);
           if (aiOption) {
             setError("");
@@ -421,6 +471,22 @@ export function AssistantChat({ locale, intent }: { locale: Locale; intent?: str
           setClarification("");
           applyTypedBudget(message, budget);
           return;
+        }
+        if (openStep === "BUDGET" && talksAboutBudget(message)) {
+          // No amount in the message for the parser or the amount reader: the
+          // step layer may still read a band («ميزانيتي ما تتعدى الميتين» →
+          // under_200). Only for a message that really is about money, and never
+          // below the confidence threshold.
+          setSending(true);
+          const band = await askAiForStepOption("BUDGET", message);
+          setSending(false);
+          if (band) {
+            setError("");
+            setInput("");
+            setClarification("");
+            chooseServiceOption(band);
+            return;
+          }
         }
         if (openStep === "BUDGET" ? mentionsNumber(message) : isBudgetStatement(message)) {
           // A budget-looking message neither the patterns nor the AI could
