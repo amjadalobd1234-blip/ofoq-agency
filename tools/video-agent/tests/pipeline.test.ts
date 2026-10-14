@@ -32,6 +32,18 @@ describe('five-stage local pipeline (mocked heavy operations)', () => {
     expect(script.duration).toBe(30);
     expect(mocks.render.mock.calls[0][0]).toMatchObject({ duration: 30, script, media: { voice: 'voice.wav', avatar: 'avatar.mp4', music: 'music.wav' } });
   });
+  it('writes CLI product details into the generated script and render config', async () => {
+    const settings = loadSettings({ BROWSER_EXECUTABLE: '/chrome', OUTPUT_DIR: output });
+    await generateAd('فيديو لعطر، 15 ثانية', 'perfume', settings, {
+      productName: 'عطر الذهب', benefit: 'يدوم 24 ساعة', price: '50,000 دينار',
+    });
+    const [run] = await readdir(output);
+    const script = JSON.parse(await readFile(path.join(output, run, 'script.json'), 'utf8'));
+    expect(script).toMatchObject({
+      productName: 'عطر الذهب', body: 'عطر الذهب — يدوم 24 ساعة', cta: 'اطلبه الآن بـ 50,000 دينار',
+    });
+    expect(mocks.render.mock.calls[0][0].script).toEqual(script);
+  });
   it('stops on missing local prerequisites without creating output media', async () => {
     mocks.preflight.mockRejectedValue(new Error('missing models'));
     await expect(generateAd('إعلان', 'services', loadSettings({ BROWSER_EXECUTABLE: '/chrome', OUTPUT_DIR: output }))).rejects.toThrow('missing models');
