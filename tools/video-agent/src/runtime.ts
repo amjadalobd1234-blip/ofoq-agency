@@ -10,6 +10,7 @@ const environment = z.object({
   TTS_RATE: z.coerce.number().min(0.5).max(2).default(1),
   TTS_MODEL_DIR: z.string().default('models/piper'),
   AVATAR_ENGINE: z.literal('sadtalker').default('sadtalker'),
+  AVATAR_MODE: z.enum(['sadtalker', 'auto']).default('sadtalker'),
   DEFAULT_AVATAR: z.string().default('assets/avatars/man-1.png'),
   SADTALKER_DIR: z.string().default('vendor/SadTalker'),
   SADTALKER_PYTHON: z.string().default('.venv-sadtalker/bin/python'),
