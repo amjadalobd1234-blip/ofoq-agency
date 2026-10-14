@@ -1,0 +1,24 @@
+node_modules/
+output/
+.env
+.env.*
+!.env.example
+*.mp4
+*.wav
+*.onnx
+*.onnx.json
+*.safetensors
+*.pth
+*.pth.tar
+models/
+vendor/
+.venv*/
+__pycache__/
+*.pyc
+.cache/
+coverage/
+# User-supplied portraits and fonts must not be published accidentally.
+assets/avatars/*
+!assets/avatars/README.md
+assets/fonts/*
+!assets/fonts/README.md
