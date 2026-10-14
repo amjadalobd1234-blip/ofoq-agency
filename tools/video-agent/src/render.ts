@@ -5,6 +5,7 @@ import { renderMedia, selectComposition } from '@remotion/renderer';
 import ffmpeg from 'fluent-ffmpeg';
 import { videoConfigSchema, type VideoConfig } from './config';
 import { localPath, toolRoot, type Settings } from './runtime';
+import { resolveBrowserExecutable, browserEnv } from './browser';
 import { requireFile } from './process';
 
 export function probeDuration(filename: string, ffprobePath: string): Promise<number> {
@@ -20,8 +21,8 @@ export function probeDuration(filename: string, ffprobePath: string): Promise<nu
 
 export async function renderVideo(config: VideoConfig, settings: Settings, runDirectory: string): Promise<string> {
   const inputProps = videoConfigSchema.parse(config);
-  // Explicit browser path prevents Remotion downloading Chrome during a run.
-  const browserExecutable = localPath(settings.BROWSER_EXECUTABLE);
+  // A resolved local browser prevents Remotion downloading Chrome during a run.
+  const browserExecutable = await resolveBrowserExecutable(browserEnv(settings));
   await requireFile(browserExecutable);
   for (const file of ['avatar.mp4', 'voice.wav', 'music.wav']) {
     const filename = path.join(runDirectory, file);
