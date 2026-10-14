@@ -20,6 +20,9 @@ fetch() {
   curl --fail --location --retry 3 "$url" --output "$target.part"
   mv "$target.part" "$target"
 }
+# Download a demo portrait only when missing/empty; a custom portrait is never overwritten.
+# fm=png ensures the 512x512 Unsplash image matches the .png extension.
+bash python/download_avatar.sh "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=512&h=512&fit=crop&fm=png"
 # Retain the voice's model card: model/dataset licenses differ from Piper's code license.
 LOCALE="${VOICE%%-*}"; NAME_QUALITY="${VOICE#*-}"; NAME="${NAME_QUALITY%-*}"; QUALITY="${VOICE##*-}"
 BASE="https://huggingface.co/rhasspy/piper-voices/resolve/main/${LOCALE%%_*}/$LOCALE/$NAME/$QUALITY"
@@ -67,5 +70,5 @@ for file in files:
 Path('models/installed-sha256.json').write_text(json.dumps(manifest, indent=2))
 PY
 .venv-sadtalker/bin/python python/avatar_generate.py --check --device cpu
-echo 'Models installed. Add your licensed portrait, install local Chrome/Chromium, and configure .env.'
-echo 'No portrait or Chrome is downloaded by this script. See README for license limitations.'
+echo 'Models and a demo portrait installed. Replace the portrait with one approved for ads; install Chrome/Chromium and configure .env.'
+echo 'Chrome is not downloaded by this script. See README for portrait/model license limitations.'

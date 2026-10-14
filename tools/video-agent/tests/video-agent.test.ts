@@ -36,7 +36,7 @@ describe('independent local package', () => {
   });
   it('ignores outputs, models, portraits, virtual environments, and secrets', () => {
     const ignore = readFileSync(path.join(toolRoot, '.gitignore'), 'utf8').split('\n');
-    expect(ignore).toEqual(expect.arrayContaining(['output/', '.env', '*.mp4', '*.wav', 'models/', 'vendor/', '.venv*/', 'assets/avatars/*']));
+    expect(ignore).toEqual(expect.arrayContaining(['output/', '.env', '*.mp4', '*.wav', 'models/', 'vendor/', '.venv*/', 'assets/avatars/*', 'assets/avatars/*.png']));
     const env = readFileSync(path.join(toolRoot, '.env.example'), 'utf8');
     expect(env).not.toContain('API_KEY');
     expect(env).toContain('TTS_ENGINE=piper');
