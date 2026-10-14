@@ -9,9 +9,11 @@ import { preflight } from './preflight';
 import { localPath, type Settings } from './runtime';
 import type { Category, VideoConfig } from './config';
 
-export async function generateAd(description: string, category: Category, settings: Settings) {
+export async function generateAd(description: string, category: Category, settings: Settings, options: {
+  productName?: string; benefit?: string; price?: string;
+} = {}) {
   console.log('⏳ كتابة السيناريو...');
-  const script = generateScript(description, category, { lang: settings.TEMPLATE_LANG });
+  const script = generateScript(description, category, { ...options, lang: settings.TEMPLATE_LANG });
   console.log(`✅ hook: "${script.hook}"\n   body: "${script.body}"\n   cta: "${script.cta}"\n   المدة: ${script.duration}s`);
   await preflight(settings);
   const outputRoot = localPath(settings.OUTPUT_DIR);
