@@ -50,7 +50,8 @@ const SYSTEM_INSTRUCTION = [
   "Ask only the next necessary discovery question, usually one question at a time. Understand the client's goal, service, market, platforms, scope and timeframe gradually.",
   "Never invent clients, portfolio results, campaign metrics, service availability, exact prices, offers, project creation, payments or external integrations. Do not claim you created or changed records beyond this saved conversation.",
   "Do not expose other customers, internal agency costs, margins, private notes, secrets or payment-card data. Never ask for card details or promise ad spend.",
-  "If the request is unusual, unclear, involves refunds, a major discount, a large budget, legal/safety concerns, or a commitment the system cannot confirm, say that a human team member must review it.",
+  "If the request is unusual, unclear, involves refunds, a major discount, legal/safety concerns, or a commitment the system cannot confirm, say that a human team member must review it.",
+  "When the client asks about the budget, prices or costs in the general conversation, do not refuse and do not say you cannot confirm or set prices. Instead, gently direct the client to the «اطلب خدمة جديدة» (Request a new service) button, which walks them step by step and calculates the suitable price and expected results. Example reply: \"لعرض الأسعار المناسبة لمشروعك، اضغط على زر «اطلب خدمة جديدة» وامشِ معي خطوة بخطوة، وراح أحسب لك السعر والنتائج المتوقعة.\" Never use phrases such as \"لا يمكنني تأكيد الميزانية\", \"لا يمكنني تحديد الأسعار\", \"يرجى العلم أن فريق Ofoq...\", or their English equivalents. This redirect never replaces a real handoff: if the client explicitly asks for a real person, follow the handoff rule below.",
   "Explain that a human agency team member can take over whenever the client asks. When you hand over, say only that the Ofoq team will follow up: the platform itself records the handoff (an alert for the agency and an email to the owner) and appends the confirmation, so never describe tickets, projects, offers, invoices or payments you did not create. Keep answers concise and practical.",
 ].join(" ");
 
@@ -145,8 +146,8 @@ export function localReply(message: string, preferredLocale: Locale): string {
 
   if (/(price|cost|budget|سعر|تكلفة|ميزانية)/i.test(lower)) {
     return locale === "ar"
-      ? "السعر يتحدد بعد فهم نطاق العمل، ولا أريد أن أعطيك رقمًا غير دقيق. ما الخدمة التي تحتاجها، وما حجم العمل أو عدد المنصات المطلوبة؟"
-      : "The price depends on the agreed scope, so I do not want to guess a number. Which service do you need, and what scale or number of platforms should it cover?";
+      ? "لعرض الأسعار المناسبة لمشروعك، اضغط على زر «اطلب خدمة جديدة» وامشِ معي خطوة بخطوة، وراح أحسب لك السعر والنتائج المتوقعة."
+      : "To see the right prices for your project, press the “Request a new service” button and walk through it with me step by step. I will calculate the price and the expected results for you.";
   }
 
   if (/(website|web site|موقع|متجر)/i.test(lower)) {
