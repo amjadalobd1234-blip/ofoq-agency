@@ -20,6 +20,14 @@ function functionDdl(source: string): string {
   return source.slice(start, end + "$function$;".length);
 }
 
+/** Extract the latest dashboard definition (0001 first, 0010 replacement last). */
+function dashboardDdl(source: string): string {
+  const start = source.lastIndexOf("CREATE OR REPLACE FUNCTION public.ofoq_client_dashboard(");
+  if (start < 0) throw new Error("the dashboard RPC is missing");
+  const end = source.indexOf("$function$;", start);
+  return source.slice(start, end + "$function$;".length);
+}
+
 describe("docs/setup/service-requests-migration.sql — hardened manual migration", () => {
   it("documents cautious application and enforces database-side price and access controls", () => {
     expect(file).toContain("خطوات التطبيق");
@@ -54,5 +62,12 @@ describe("docs/setup/service-requests-migration.sql — hardened manual migratio
     expect(functionDdl(file)).toBe(functionDdl(migration));
     expect(functionDdl(file)).toBe(functionDdl(bundle));
     expect(file.match(/CREATE OR REPLACE FUNCTION public\.ofoq_client_service_request\(/g)).toHaveLength(1);
+  });
+
+  it("carries the hardened client-dashboard replacement in the manual SQL and the bundle", () => {
+    expect(dashboardDdl(file)).toBe(dashboardDdl(migration));
+    expect(dashboardDdl(file)).toBe(dashboardDdl(bundle));
+    expect(dashboardDdl(file)).toContain("o.status IN ('SENT', 'APPROVED', 'REJECTED')");
+    expect(dashboardDdl(file)).not.toContain("o.status NOT IN ('CANCELLED', 'EXPIRED')");
   });
 });
