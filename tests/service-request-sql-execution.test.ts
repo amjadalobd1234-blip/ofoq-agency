@@ -31,6 +31,10 @@ import {
 } from "../src/lib/services/service-requests.service";
 
 const setupBundle = fs.readFileSync(path.join(process.cwd(), "docs", "setup", "supabase-setup.sql"), "utf8");
+const authMigration = fs.readFileSync(
+  path.join(process.cwd(), "db", "migrations", "supabase", "0001_auth_portal.sql"),
+  "utf8",
+);
 const legacyServiceRequestMigration = fs.readFileSync(
   path.join(process.cwd(), "db", "migrations", "supabase", "0008_service_requests.sql"),
   "utf8",
@@ -154,13 +158,15 @@ beforeAll(async () => {
   for (const table of setupTables) await db.exec(tableDdl(table));
   await db.exec(functionDdl("ofoq_ensure_customer_profile"));
   await db.exec(functionDdlFrom(legacyServiceRequestMigration, "ofoq_client_service_request", "migration 0008"));
+  // The original dashboard from 0001 is installed before 0010, exactly as in a
+  // real deployment; the hardening migration replaces it.
+  await db.exec(functionDdlFrom(authMigration, "ofoq_client_dashboard", "migration 0001"));
   // Simulate the old broad table grant and prove 0010 removes it.
   await db.exec("GRANT SELECT ON public.offers, public.offer_items TO authenticated");
   await db.exec("GRANT SELECT (internal_cost_minor) ON public.offers TO authenticated");
   await db.exec("GRANT SELECT (description_ar) ON public.offer_items TO authenticated");
   await db.exec(securityMigration);
   await db.exec(functionDdl("ofoq_is_staff"));
-  await db.exec(functionDdl("ofoq_client_dashboard"));
   await db.exec(functionDdl("ofoq_admin_dashboard"));
   await db.exec("GRANT EXECUTE ON FUNCTION public.ofoq_client_dashboard() TO authenticated");
   await db.exec("GRANT EXECUTE ON FUNCTION public.ofoq_admin_dashboard() TO authenticated");
@@ -600,14 +606,36 @@ describe("ofoq_client_service_request on PostgreSQL", () => {
     await db.query("RESET ROLE");
   });
 
-  it("serves safe client-owned offer projections through the client RPC and restricts the admin RPC to staff", async () => {
+  it("serves safe published client-owned offer projections through the client RPC and restricts the admin RPC to staff", async () => {
+    // The guided requests above stay DRAFT and are hidden by the hardened
+    // dashboard. Publish a representative subset through the offer lifecycle so
+    // the projection can still be checked, including an unpriced NULL offer.
+    const ownRows = await db.query<{ id: string; total_minor: string | number | null }>(
+      "SELECT id, total_minor FROM public.offers WHERE customer_id = $1 ORDER BY id",
+      [CUSTOMER_ID],
+    );
+    expect(ownRows.rows.length).toBeGreaterThan(5);
+    const unpricedId = ownRows.rows.find((row) => row.total_minor === null)?.id;
+    expect(unpricedId).toBeTruthy();
+    const pricedIds = ownRows.rows.filter((row) => row.id !== unpricedId).map((row) => row.id);
+    expect(pricedIds.length).toBeGreaterThanOrEqual(5);
+    const [sentId, approvedId, rejectedId, cancelledId, expiredId] = pricedIds;
+    await db.query("UPDATE public.offers SET status = 'SENT' WHERE id = $1", [unpricedId]);
+    await db.query("UPDATE public.offers SET status = 'SENT' WHERE id = $1", [sentId]);
+    await db.query("UPDATE public.offers SET status = 'APPROVED' WHERE id = $1", [approvedId]);
+    await db.query("UPDATE public.offers SET status = 'REJECTED' WHERE id = $1", [rejectedId]);
+    await db.query("UPDATE public.offers SET status = 'CANCELLED' WHERE id = $1", [cancelledId]);
+    await db.query("UPDATE public.offers SET status = 'EXPIRED' WHERE id = $1", [expiredId]);
+    await db.query("UPDATE public.offers SET status = 'SENT' WHERE customer_id = $1", [SECOND_CUSTOMER_ID]);
+
     const clientDashboard = decodeJsonRecord(await callAsAuthenticated<unknown>(CLIENT_USER_ID, "SELECT public.ofoq_client_dashboard() AS result"));
     const clientOffers = clientDashboard.offers as Record<string, any>[];
-    const dbOwnIds = await db.query<{ id: string }>("SELECT id FROM public.offers WHERE customer_id = $1", [CUSTOMER_ID]);
     const dbOtherIds = await db.query<{ id: string }>("SELECT id FROM public.offers WHERE customer_id = $1", [SECOND_CUSTOMER_ID]);
     const clientIds = clientOffers.map((offer) => offer.id);
     expect(clientIds.length).toBeGreaterThan(0);
-    expect(new Set(clientIds)).toEqual(new Set(dbOwnIds.rows.map((row) => row.id)));
+    // Only the published statuses are visible; DRAFT, CANCELLED and EXPIRED
+    // rows of the same client stay hidden.
+    expect(new Set(clientIds)).toEqual(new Set([sentId, approvedId, rejectedId, unpricedId]));
     expect(clientIds.some((id) => dbOtherIds.rows.some((other) => other.id === id))).toBe(false);
     for (const offer of clientOffers) {
       expect(offer).not.toHaveProperty("internalCostMinor");

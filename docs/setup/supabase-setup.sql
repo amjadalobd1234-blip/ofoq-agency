@@ -3741,7 +3741,9 @@ NOTIFY pgrst, 'reload schema';
 --   * request dedupe keys are scoped to the authenticated user/customer;
 --   * only a DB-owned private record can mark a newly calculated price trusted;
 --   * no staff identities/emails are returned by the client-callable RPC;
---   * authenticated/anon clients have no direct SELECT on offers/offer_items.
+--   * authenticated/anon clients have no direct SELECT on offers/offer_items;
+--   * the client dashboard RPC is replaced so DRAFT offers (including the
+--     guided service requests) are never returned to the client.
 --
 -- Existing DRAFT rows are deliberately not backfilled: the deployed database
 -- and any previous direct-RPC use cannot be verified from this repository.
@@ -3755,6 +3757,7 @@ DECLARE
   v_missing text[];
   v_rpc_count integer;
   v_rpc_owner text;
+  v_dashboard_owner text;
 BEGIN
   IF to_regclass('public.users') IS NULL
      OR to_regclass('public.customers') IS NULL
@@ -3808,6 +3811,10 @@ BEGIN
     RAISE EXCEPTION 'Ofoq service-request security migration stopped: public.ofoq_ensure_customer_profile() is missing; apply/verify the Auth portal migration first';
   END IF;
 
+  IF to_regprocedure('public.ofoq_client_dashboard()') IS NULL THEN
+    RAISE EXCEPTION 'Ofoq service-request security migration stopped: public.ofoq_client_dashboard() is missing; apply/verify 0001_auth_portal.sql before applying this migration';
+  END IF;
+
   SELECT count(*) INTO v_rpc_count
   FROM pg_catalog.pg_proc AS p
   JOIN pg_catalog.pg_namespace AS n ON n.oid = p.pronamespace
@@ -3833,6 +3840,14 @@ BEGIN
   WHERE p.oid = to_regprocedure('public.ofoq_client_service_request(text, text, text, text, text, jsonb, jsonb, jsonb, text, text)');
   IF v_rpc_owner IS DISTINCT FROM current_user THEN
     RAISE EXCEPTION 'Ofoq service-request security migration stopped: run it as the existing RPC owner so the private price-verification table is owned by the SECURITY DEFINER role';
+  END IF;
+
+  SELECT r.rolname INTO v_dashboard_owner
+  FROM pg_catalog.pg_proc AS p
+  JOIN pg_catalog.pg_roles AS r ON r.oid = p.proowner
+  WHERE p.oid = to_regprocedure('public.ofoq_client_dashboard()');
+  IF v_dashboard_owner IS DISTINCT FROM current_user THEN
+    RAISE EXCEPTION 'Ofoq service-request security migration stopped: run it as the owner of public.ofoq_client_dashboard() so the replacement keeps the same SECURITY DEFINER role';
   END IF;
 
   IF to_regclass('public.ofoq_service_request_price_verifications') IS NOT NULL THEN
@@ -4541,6 +4556,170 @@ BEGIN
 END;
 $function$;
 
+-- Replace the client dashboard RPC so the offer section uses a positive
+-- allowlist instead of exposing every status except CANCELLED/EXPIRED. The
+-- function is SECURITY DEFINER because direct SELECT on offers is revoked; the
+-- customer ownership predicate and every other dashboard section stay exactly
+-- as shipped in 0001_auth_portal.sql. The replace keeps the installed owner
+-- (checked in the preflight) and its ACL, which is re-asserted below.
+CREATE OR REPLACE FUNCTION public.ofoq_client_dashboard()
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $function$
+DECLARE
+  v_user_id text := (SELECT auth.uid())::text;
+  v_customer_id text;
+  v_customer jsonb;
+  v_projects jsonb;
+  v_offers jsonb;
+  v_invoices jsonb;
+  v_payments jsonb;
+  v_subscriptions jsonb;
+  v_campaigns jsonb;
+  v_reports jsonb;
+  v_files jsonb;
+BEGIN
+  IF v_user_id IS NULL OR NOT EXISTS (
+    SELECT 1 FROM public.users AS u WHERE u.id = v_user_id AND u.status = 'ACTIVE'
+  ) THEN
+    RAISE EXCEPTION 'Authentication required or account inactive' USING ERRCODE = '28000';
+  END IF;
+
+  SELECT c.id INTO v_customer_id
+  FROM public.customers AS c
+  WHERE c.user_id = v_user_id
+  ORDER BY c.created_at ASC
+  LIMIT 1;
+
+  IF v_customer_id IS NULL THEN
+    RETURN jsonb_build_object(
+      'customer', NULL, 'projects', '[]'::jsonb, 'offers', '[]'::jsonb,
+      'invoices', '[]'::jsonb, 'payments', '[]'::jsonb, 'subscriptions', '[]'::jsonb,
+      'campaigns', '[]'::jsonb, 'reports', '[]'::jsonb, 'files', '[]'::jsonb
+    );
+  END IF;
+
+  SELECT jsonb_build_object(
+    'id', c.id, 'name', c.contact_name, 'companyName', c.company_name,
+    'email', c.email, 'phone', c.phone, 'country', c.country, 'city', c.city,
+    'locale', c.locale, 'currency', c.currency, 'goals', c.goals, 'needs', c.needs
+  ) INTO v_customer
+  FROM public.customers AS c
+  WHERE c.id = v_customer_id;
+
+  SELECT coalesce(jsonb_agg(item ORDER BY created_at DESC), '[]'::jsonb) INTO v_projects
+  FROM (
+    SELECT p.created_at,
+      jsonb_build_object(
+        'id', p.id, 'code', p.code, 'title', p.title, 'titleEn', p.title_en,
+        'brief', p.brief, 'status', p.status, 'progress', p.progress,
+        'currency', p.currency, 'amountTotalMinor', p.amount_total_minor,
+        'startDate', p.start_date, 'dueDate', p.due_date,
+        'createdAt', p.created_at,
+        'tasks', coalesce((
+          SELECT jsonb_agg(jsonb_build_object(
+            'id', t.id, 'title', t.title, 'titleEn', t.title_en,
+            'status', t.status, 'dueDate', t.due_date, 'sortOrder', t.sort_order
+          ) ORDER BY t.sort_order)
+          FROM public.project_tasks AS t
+          WHERE t.project_id = p.id AND t.visibility = 'CLIENT'
+        ), '[]'::jsonb)
+      ) AS item
+    FROM public.projects AS p
+    WHERE p.customer_id = v_customer_id
+      AND p.status <> 'CANCELLED'
+    ORDER BY p.created_at DESC
+    LIMIT 20
+  ) AS project_rows;
+
+  SELECT coalesce(jsonb_agg(item ORDER BY created_at DESC), '[]'::jsonb) INTO v_offers
+  FROM (
+    SELECT o.created_at,
+      jsonb_build_object(
+        'id', o.id, 'code', o.code, 'status', o.status, 'currency', o.currency,
+        'subtotalMinor', o.subtotal_minor, 'discountMinor', o.discount_minor,
+        'totalMinor', o.total_minor, 'validUntil', o.valid_until,
+        'clientNote', o.client_note, 'createdAt', o.created_at,
+        'items', coalesce((
+          SELECT jsonb_agg(jsonb_build_object(
+            'descriptionAr', oi.description_ar, 'descriptionEn', oi.description_en,
+            'quantity', oi.quantity, 'unitPriceMinor', oi.unit_price_minor,
+            'billingType', oi.billing_type, 'months', oi.months, 'totalMinor', oi.total_minor
+          ) ORDER BY oi.sort_order)
+          FROM public.offer_items AS oi WHERE oi.offer_id = o.id
+        ), '[]'::jsonb)
+      ) AS item
+    FROM public.offers AS o
+    WHERE o.customer_id = v_customer_id
+      -- Positive allowlist of published offer states. DRAFT is internal
+      -- (including guided service requests awaiting staff review), and
+      -- EXPIRED/CANCELLED were already hidden by the original dashboard.
+      AND o.status IN ('SENT', 'APPROVED', 'REJECTED')
+    ORDER BY o.created_at DESC
+    LIMIT 20
+  ) AS offer_rows;
+
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+    'id', i.id, 'number', i.number, 'currency', i.currency, 'subtotalMinor', i.subtotal_minor,
+    'taxMinor', i.tax_minor, 'totalMinor', i.total_minor, 'amountPaidMinor', i.amount_paid_minor,
+    'status', i.status, 'issuedAt', i.issued_at, 'dueAt', i.due_at, 'paidAt', i.paid_at,
+    'notes', i.notes_client, 'createdAt', i.created_at
+  ) ORDER BY i.created_at DESC), '[]'::jsonb) INTO v_invoices
+  FROM public.invoices AS i
+  WHERE i.customer_id = v_customer_id AND i.status <> 'CANCELLED';
+
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+    'id', p.id, 'invoiceId', p.invoice_id, 'amountMinor', p.amount_minor,
+    'refundedMinor', p.refunded_minor, 'currency', p.currency, 'method', p.method,
+    'status', p.status, 'paidAt', p.paid_at, 'createdAt', p.created_at
+  ) ORDER BY p.created_at DESC), '[]'::jsonb) INTO v_payments
+  FROM public.payments AS p
+  WHERE p.customer_id = v_customer_id;
+
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+    'id', s.id, 'planName', s.plan_name, 'amountMinor', s.amount_minor,
+    'currency', s.currency, 'interval', s.interval, 'status', s.status,
+    'periodEnd', s.current_period_end, 'nextRenewalAt', s.next_renewal_at,
+    'cancelAtPeriodEnd', s.cancel_at_period_end
+  ) ORDER BY s.created_at DESC), '[]'::jsonb) INTO v_subscriptions
+  FROM public.subscriptions AS s
+  WHERE s.customer_id = v_customer_id;
+
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+    'id', c.id, 'name', c.name, 'platform', c.platform, 'status', c.status,
+    'currency', c.currency, 'totalBudgetMinor', c.total_budget_minor,
+    'dailyBudgetMinor', c.daily_budget_minor, 'spentMinor', c.spent_minor,
+    'startDate', c.start_date, 'endDate', c.end_date, 'syncStatus', c.sync_status
+  ) ORDER BY c.created_at DESC), '[]'::jsonb) INTO v_campaigns
+  FROM public.campaigns AS c
+  WHERE c.customer_id = v_customer_id AND c.status <> 'ARCHIVED';
+
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+    'id', r.id, 'title', r.title, 'summary', r.summary, 'body', r.body,
+    'type', r.report_type, 'language', r.language, 'periodStart', r.period_start,
+    'periodEnd', r.period_end, 'status', r.status, 'createdAt', r.created_at
+  ) ORDER BY r.created_at DESC), '[]'::jsonb) INTO v_reports
+  FROM public.reports AS r
+  WHERE r.customer_id = v_customer_id AND r.status = 'SENT';
+
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+    'id', f.id, 'name', f.name, 'kind', f.kind, 'mime', f.mime,
+    'sizeBytes', f.size_bytes, 'projectId', f.project_id, 'createdAt', f.created_at
+  ) ORDER BY f.created_at DESC), '[]'::jsonb) INTO v_files
+  FROM public.files AS f
+  WHERE f.customer_id = v_customer_id AND f.visibility = 'CLIENT';
+
+  RETURN jsonb_build_object(
+    'customer', v_customer, 'projects', v_projects, 'offers', v_offers,
+    'invoices', v_invoices, 'payments', v_payments, 'subscriptions', v_subscriptions,
+    'campaigns', v_campaigns, 'reports', v_reports, 'files', v_files
+  );
+END;
+$function$;
+
 -- Direct table SELECT previously granted by docs/setup/rls-policies.sql could
 -- expose internal offer columns. Read offers only through the allowlisted,
 -- ownership-checked client/admin SECURITY DEFINER RPCs.
@@ -4569,6 +4748,11 @@ $revoke_offer_column_privileges$;
 
 REVOKE ALL ON FUNCTION public.ofoq_client_service_request(text, text, text, text, text, jsonb, jsonb, jsonb, text, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.ofoq_client_service_request(text, text, text, text, text, jsonb, jsonb, jsonb, text, text) TO authenticated;
+
+-- The dashboard stays callable only by signed-in users. Re-assert the ACL
+-- explicitly because the replacement function is the only offer read path.
+REVOKE ALL ON FUNCTION public.ofoq_client_dashboard() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.ofoq_client_dashboard() TO authenticated;
 
 NOTIFY pgrst, 'reload schema';
 
