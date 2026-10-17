@@ -76,9 +76,10 @@ function savedRpc(orderCode = "OFOQ-2026-004", created = true) {
       created,
       category: "NEW_REQUEST",
       severity: "IMPORTANT",
-      conversationId: "conv-1",
-      customerId: "customer-1",
-      staff: 2,
+      price: { min: 390, max: 1950, mid: 1170, currency: "USD" },
+      priceVerified: true,
+      // The SQL RPC must not expose its internal notification recipients.
+      staff: [{ id: "private-staff-id", email: "staff-secret@example.test" }],
     },
     error: null,
   };
@@ -135,8 +136,10 @@ describe("POST /api/chat/service-request", () => {
       alert: { category: "NEW_REQUEST", severity: "IMPORTANT" },
       created: true,
       budget: { range: "200-500", amount: 500, band: "200_500", source: "typed" },
+      price: { min: 390, max: 1950, mid: 1170 },
       contact: { channel: "whatsapp", value: TYPED_NUMBER, whatsappNumber: "9647707048629", whatsappLink: "https://wa.me/9647707048629" },
     });
+    expect(payload.data).not.toHaveProperty("staff");
     expect(payload.data.email).toMatchObject({ delivered: false });
     expect(finalized).toBe(1);
 
@@ -148,8 +151,17 @@ describe("POST /api/chat/service-request", () => {
     expect(args.p_title_en).toBe("New service request");
     expect(args.p_conversation_id).toBe("conv-1");
     expect(args.p_locale).toBe("ar");
-    expect(args.p_offer).toMatchObject({ status: "DRAFT", currency: "USD", pricing_reason: "service_request:ads:200_500:iraq_all" });
-    expect((args.p_offer as Record<string, any>).pricing_breakdown).toMatchObject({ budgetRange: "200-500", budgetAmount: 500, status: "DRAFT" });
+    expect(args.p_offer).toEqual({
+      pricing_breakdown: {
+        serviceType: "ads",
+        size: "medium",
+        budgetBand: "200_500",
+        budgetAmount: 500,
+        budgetRange: "200-500",
+        budgetSource: "typed",
+        targeting: "iraq_all",
+      },
+    });
     expect(args.p_contact).toEqual({ channel: "whatsapp", value: TYPED_NUMBER, whatsappNumber: "9647707048629", whatsappLink: "https://wa.me/9647707048629" });
     const body = String(args.p_body_ar);
     expect(body).toContain("قناة التواصل: واتساب");
@@ -179,7 +191,48 @@ describe("POST /api/chat/service-request", () => {
     const response = await POST(post({ ...whatsappBody, answers: { ...whatsappBody.answers, budget: "under_200", budgetRange: "200-500", budgetAmount: "500" } }));
     const payload = (await response.json()) as { data: Record<string, any> };
     expect(payload.data.budget).toMatchObject({ band: "under_200", range: "<200", amount: 200, source: "option" });
-    expect((calls[0]!.args.p_offer as Record<string, any>).pricing_reason).toBe("service_request:ads:under_200:iraq_all");
+    expect(calls[0]!.args.p_offer).toEqual({
+      pricing_breakdown: {
+        serviceType: "ads",
+        size: "medium",
+        budgetBand: "under_200",
+        budgetAmount: 200,
+        budgetRange: "<200",
+        budgetSource: "option",
+        targeting: "iraq_all",
+      },
+    });
+  });
+
+  it("keeps an unpublished `other` price null through the RPC response and avoids sending money fields", async () => {
+    const saved = savedRpc();
+    const base = saved.data as Record<string, unknown>;
+    rpcResponse = {
+      data: { ...base, price: { min: null, max: null, mid: null, currency: "USD" }, priceVerified: true },
+      error: null,
+    };
+    const response = await POST(post({
+      ...whatsappBody,
+      requestId: "other-service-request-0001",
+      answers: { ...whatsappBody.answers, type: "other" },
+    }));
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as { data: Record<string, any> };
+    expect(payload.data.price).toEqual({ min: null, max: null, mid: null });
+    expect(payload.data.price).not.toEqual({ min: 0, max: 0, mid: 0 });
+    expect(calls[0]!.args.p_offer).toEqual({
+      pricing_breakdown: {
+        serviceType: "other",
+        size: "medium",
+        budgetBand: "200_500",
+        budgetAmount: 500,
+        budgetRange: "200-500",
+        budgetSource: "typed",
+        targeting: "iraq_all",
+      },
+    });
+    expect(String(calls[0]!.args.p_body_ar)).toContain("يحتاج مراجعة");
+    expect(String(calls[0]!.args.p_body_ar)).not.toContain("$0");
   });
 
   it("answers a clear 502 with a hint when the RPC is not installed — never a silent success", async () => {
@@ -189,7 +242,7 @@ describe("POST /api/chat/service-request", () => {
     const payload = (await response.json()) as Record<string, unknown>;
     expect(payload).toMatchObject({ code: "SERVICE_REQUEST_RPC_NOT_INSTALLED", requestId: whatsappBody.requestId, correlationId: "corr-1" });
     expect(String(payload.error)).toContain("not installed");
-    expect(String(payload.hint)).toContain("0008_service_requests.sql");
+    expect(String(payload.hint)).toContain("0010_harden_service_requests_and_offer_access.sql");
   });
 
   it("surfaces a schema rejection (REQUESTED is not an allowed status yet) as an error", async () => {

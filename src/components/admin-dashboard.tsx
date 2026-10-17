@@ -210,7 +210,8 @@ function formatBuckets(items: Array<{ currency: string; totalMinor: number | str
   if (!items.length) return "—";
   return items.map((item) => formatMoney(item.totalMinor, item.currency, locale)).join(" · ");
 }
-function formatMoney(value: number | string, currency: string, locale: Locale): string {
+function formatMoney(value: number | string | null, currency: string, locale: Locale): string {
+  if (value === null) return locale === "ar" ? "يحتاج مراجعة" : "Needs review";
   const amount = Number(value || 0) / 100;
   try { return new Intl.NumberFormat(locale === "ar" ? "ar-IQ-u-nu-latn" : "en-US", { style: "currency", currency, maximumFractionDigits: 2 }).format(amount); }
   catch { return `${amount.toFixed(2)} ${currency}`; }

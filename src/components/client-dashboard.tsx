@@ -12,7 +12,7 @@ interface Project {
   tasks?: Array<{ id: string; title: string; titleEn?: string | null; status: string; dueDate?: string | null }>;
 }
 interface Offer {
-  id: string; code: string; status: string; currency: string; totalMinor: number | string;
+  id: string; code: string; status: string; currency: string; totalMinor: number | string | null;
   validUntil?: string | null; clientNote?: string | null;
   items?: Array<{ descriptionAr: string; descriptionEn?: string | null; billingType: string; months?: number | null }>;
 }
@@ -124,7 +124,7 @@ export function ClientDashboard({ locale }: { locale: Locale }) {
             <div className="compact-list">
               {data.offers.map((offer) => <article className="compact-row" key={offer.id}>
                 <div className="compact-row-copy"><strong>{offer.code}</strong><span>{offer.items?.[0] ? (ar ? offer.items[0].descriptionAr : offer.items[0].descriptionEn || offer.items[0].descriptionAr) : (ar ? "عرض مخصص" : "Custom offer")}</span></div>
-                <div className="compact-row-side"><strong>{formatMoney(offer.totalMinor, offer.currency, locale)}</strong><StatusPill status={offer.status} locale={locale} /></div>
+                <div className="compact-row-side"><strong>{offer.totalMinor === null ? (ar ? "يحتاج مراجعة" : "Needs review") : formatMoney(offer.totalMinor, offer.currency, locale)}</strong><StatusPill status={offer.status} locale={locale} /></div>
               </article>)}
             </div>
           )}

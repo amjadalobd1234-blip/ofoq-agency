@@ -157,7 +157,9 @@ CREATE POLICY "offers_owner_select" ON public.offers
     )
   );
 
-GRANT SELECT ON TABLE public.offers TO authenticated;
+-- Offers contain internal pricing/employee fields. Clients use the
+-- ownership-checked dashboard RPC instead of direct table SELECT.
+REVOKE ALL PRIVILEGES ON TABLE public.offers FROM PUBLIC, anon, authenticated;
 
 ALTER TABLE public.offer_items ENABLE ROW LEVEL SECURITY;
 
@@ -174,7 +176,29 @@ CREATE POLICY "offer_items_owner_select" ON public.offer_items
     )
   );
 
-GRANT SELECT ON TABLE public.offer_items TO authenticated;
+-- Keep offer_items behind the same allowlisted RPC boundary.
+REVOKE ALL PRIVILEGES ON TABLE public.offer_items FROM PUBLIC, anon, authenticated;
+
+-- Clear legacy per-column SELECT grants too; these can survive a table-level
+-- REVOKE and may expose internal columns through the Data API.
+DO $revoke_offer_column_privileges$
+DECLARE
+  v_table text;
+  v_columns text;
+BEGIN
+  FOREACH v_table IN ARRAY ARRAY['offers', 'offer_items'] LOOP
+    SELECT string_agg(quote_ident(c.column_name), ', ' ORDER BY c.ordinal_position)
+      INTO v_columns
+    FROM information_schema.columns AS c
+    WHERE c.table_schema = 'public' AND c.table_name = v_table;
+
+    IF v_columns IS NOT NULL THEN
+      EXECUTE 'REVOKE ALL PRIVILEGES (' || v_columns || ') ON TABLE public.'
+        || quote_ident(v_table) || ' FROM PUBLIC, anon, authenticated';
+    END IF;
+  END LOOP;
+END
+$revoke_offer_column_privileges$;
 
 -- ===========================================================================
 -- invoices

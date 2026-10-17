@@ -283,7 +283,7 @@ describe("when the save fails", () => {
     await waitFor(() => expect(storedContext()?.submission).toMatchObject({ status: "failed" }));
     const failed = shownBodies().at(-1)!;
     expect(failed).toContain("تعذر حفظ طلبك ❌");
-    expect(failed).toContain("0008_service_requests.sql");
+    expect(failed).toContain("0010_harden_service_requests_and_offer_access.sql");
     expect(failed).not.toContain("تم حفظ طلبك ✅");
     expect(failed).not.toContain("رقم الطلب:");
 

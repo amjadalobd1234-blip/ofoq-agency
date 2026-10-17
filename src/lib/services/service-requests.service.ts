@@ -15,7 +15,7 @@
  *   3. an email to the agency owner through Resend.
  *
  * Persistence goes through a `ServiceRequestStore`. In production that is the
- * Supabase RPC `ofoq_client_service_request` (migration 0008), which writes the
+ * Supabase RPC `ofoq_client_service_request` (hardened by migration 0010), which writes the
  * offer and the alert in one transaction with the signed-in client's identity.
  * The local store writes the same two rows into the platform's own database
  * (tests, local development). The request is NEVER routed through the
@@ -147,9 +147,9 @@ export interface PreparedServiceRequestOffer {
   customer_id: string;
   status: typeof SERVICE_REQUEST_OFFER_STATUS;
   currency: "USD";
-  /** Middle value of the published price range, in cents. */
-  total_minor: number;
-  subtotal_minor: number;
+  /** Middle value of the published price range, in cents; null for an unpriced request. */
+  total_minor: number | null;
+  subtotal_minor: number | null;
   discount_minor: number;
   internal_cost_minor: number;
   margin_pct: null;
@@ -338,7 +338,7 @@ export function prepareServiceRequestOffer(input: ServiceRequestSubmissionInput)
     source: "guided_service_request",
   });
 
-  const totalMinor = Math.round((result.midPrice ?? 0) * 100);
+  const totalMinor = result.midPrice === null ? null : Math.round(result.midPrice * 100);
   const channel = contactChannelLabel(contact.channel);
 
   const offer: PreparedServiceRequestOffer = {
@@ -488,6 +488,10 @@ export interface ServiceRequestSaveResult {
   offerId: string | null;
   offerStatus: string;
   alertId: string | null;
+  /** Price returned by the authoritative store; null-valued fields mean no published price. */
+  price: { min: number | null; max: number | null; mid: number | null };
+  /** False for historical/unverified rows created before the database pricing migration. */
+  priceVerified: boolean;
   /** True when this call wrote the rows; false when the request id was already saved. */
   created: boolean;
   alert: { category: string; severity: string };
@@ -516,13 +520,32 @@ interface ServiceRequestRpcResult {
   created?: boolean | null;
   category?: string | null;
   severity?: string | null;
+  price?: unknown;
+  priceVerified?: boolean | null;
+}
+
+/** Accept only a complete price object returned by the database RPC. */
+function parseRpcServiceRequestPrice(value: unknown): ServiceRequestSaveResult["price"] | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  if (source.currency !== "USD") return null;
+  const raw = [source.min, source.max, source.mid];
+  if (raw.every((item) => item === null)) return { min: null, max: null, mid: null };
+  if (raw.some((item) => item === null || item === undefined || item === "")) return null;
+  const values = raw.map((item) => (typeof item === "number" ? item : Number(item)));
+  if (
+    !values.every((item) => Number.isSafeInteger(item) && item >= 0)
+    || values[0]! > values[2]!
+    || values[2]! > values[1]!
+  ) return null;
+  return { min: values[0]!, max: values[1]!, mid: values[2]! };
 }
 
 /** Turns a PostgreSQL/PostgREST error into the next thing to look at. */
 export function describeServiceRequestError(code?: string | null, message?: string | null): string {
   const text = `${code ?? ""} ${message ?? ""}`;
   if (/PGRST202|42883/.test(text)) {
-    return `the ${SERVICE_REQUEST_RPC} RPC is not installed — apply docs/setup/supabase-setup.sql (it bundles db/migrations/supabase/0008_service_requests.sql) in the SQL Editor, then NOTIFY pgrst, 'reload schema'`;
+    return `the hardened ${SERVICE_REQUEST_RPC} RPC is not installed — apply db/migrations/supabase/0010_harden_service_requests_and_offer_access.sql (or the regenerated docs/setup/supabase-setup.sql) after the core setup, then NOTIFY pgrst, 'reload schema'`;
   }
   if (/\b23514\b/.test(text) || /offers_status_check|violates check constraint/i.test(text)) {
     return "the offers.status CHECK rejected the row — the store must write DRAFT until pending/0009_offers_requested_status.sql is applied";
@@ -533,7 +556,7 @@ export function describeServiceRequestError(code?: string | null, message?: stri
   return "unclassified service-request failure — check the Supabase logs for the RPC call";
 }
 
-/** The production store: one transaction in Supabase through migration 0008's RPC. */
+/** The production store: one transaction in Supabase through the hardened service-request RPC. */
 export function supabaseServiceRequestStore(client: ServiceRequestRpcClient): ServiceRequestStore {
   return {
     name: "supabase",
@@ -548,15 +571,21 @@ export function supabaseServiceRequestStore(client: ServiceRequestRpcClient): Se
         p_body_ar: alert.body_ar,
         p_body_en: alert.body_en,
         p_offer: {
-          status: record.offer.status,
-          currency: record.offer.currency,
-          total_minor: record.offer.total_minor,
-          subtotal_minor: record.offer.subtotal_minor,
-          pricing_reason: record.offer.pricing_reason,
-          pricing_breakdown: JSON.parse(record.offer.pricing_breakdown) as Record<string, unknown>,
-          client_note: record.offer.client_note,
-          internal_note: record.offer.internal_note,
-          created_by_agent: record.offer.created_by_agent,
+          // Keep the RPC contract small: only the validated request dimensions
+          // the database needs to recalculate. No amount, currency, status,
+          // pricing output, notes or employee-controlled metadata are sent.
+          pricing_breakdown: (() => {
+            const source = JSON.parse(record.offer.pricing_breakdown) as Record<string, unknown>;
+            return {
+              serviceType: source.serviceType,
+              size: source.size,
+              budgetBand: source.budgetBand,
+              budgetAmount: source.budgetAmount,
+              budgetRange: source.budgetRange,
+              budgetSource: source.budgetSource,
+              targeting: source.targeting,
+            };
+          })(),
         },
         p_contact: {
           channel: record.contact.channel,
@@ -610,11 +639,15 @@ export function supabaseServiceRequestStore(client: ServiceRequestRpcClient): Se
           code: "SERVICE_REQUEST_NO_ORDER_CODE",
         });
       }
+      const rpcPrice = parseRpcServiceRequestPrice(result.price);
+      const priceVerified = result.priceVerified === true && rpcPrice !== null;
       return {
         orderCode,
         offerId: typeof result.offerId === "string" ? result.offerId : null,
         offerStatus: typeof result.offerStatus === "string" ? result.offerStatus : SERVICE_REQUEST_OFFER_STATUS,
         alertId: typeof result.alertId === "string" ? result.alertId : null,
+        price: priceVerified ? rpcPrice! : { min: null, max: null, mid: null },
+        priceVerified,
         created: result.created !== false,
         alert: {
           category: typeof result.category === "string" ? result.category : SERVICE_REQUEST_CATEGORY,
@@ -658,6 +691,8 @@ export function localServiceRequestStore(): ServiceRequestStore {
           offerId: meta.offerId ?? null,
           offerStatus: SERVICE_REQUEST_OFFER_STATUS,
           alertId: existing.id,
+          price: record.price,
+          priceVerified: true,
           created: false,
           alert: { category: SERVICE_REQUEST_CATEGORY, severity: SERVICE_REQUEST_SEVERITY },
         };
@@ -727,6 +762,8 @@ export function localServiceRequestStore(): ServiceRequestStore {
         offerId,
         offerStatus: SERVICE_REQUEST_OFFER_STATUS,
         alertId: saved.id,
+        price: record.price,
+        priceVerified: true,
         created: true,
         alert: { category: alert.category, severity: alert.severity },
       };
@@ -763,9 +800,37 @@ export async function submitServiceRequest(
   input: ServiceRequestSubmissionInput,
   options: { store?: ServiceRequestStore } = {},
 ): Promise<ServiceRequestSubmissionResult> {
-  const record = prepareServiceRequestOffer(input);
+  const preparedRecord = prepareServiceRequestOffer(input);
   const store = options.store ?? localServiceRequestStore();
-  const saved = await store.save(record);
+  const saved = await store.save(preparedRecord);
+  const trustedPrice = saved.priceVerified ? saved.price : { min: null, max: null, mid: null };
+  const pricing: PricingResult = {
+    ...preparedRecord.pricing,
+    minPrice: trustedPrice.min,
+    maxPrice: trustedPrice.max,
+    midPrice: trustedPrice.mid,
+  };
+  const record: ServiceRequestRecord = {
+    ...preparedRecord,
+    price: trustedPrice,
+    pricing,
+    offer: {
+      ...preparedRecord.offer,
+      total_minor: trustedPrice.mid === null ? null : Math.round(trustedPrice.mid * 100),
+      subtotal_minor: trustedPrice.mid === null ? null : Math.round(trustedPrice.mid * 100),
+    },
+  };
+  const summaryInput: ServiceRequestSubmissionInput = {
+    requestId: record.requestId,
+    answers: record.answers,
+    contact: record.contact,
+    clientEmail: record.clientEmail,
+    customerName: record.customerName,
+    locale: record.locale,
+    conversationId: record.conversationId,
+  };
+  record.summaryAr = serviceRequestRecordSummary(summaryInput, "ar", pricing);
+  record.summaryEn = serviceRequestRecordSummary(summaryInput, "en", pricing);
   const locale = record.locale;
   const alert = buildServiceRequestAlert(record, saved.orderCode);
   const channelLabel = contactChannelLabel(record.contact.channel);

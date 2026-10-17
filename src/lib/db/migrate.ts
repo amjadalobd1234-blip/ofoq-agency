@@ -107,15 +107,32 @@ export async function runMigrations(
 
     const statements = splitStatements(translate(file.sql, db.dialect));
     const statementStarted = Date.now();
-    await db.transaction(async (tx) => {
-      for (const statement of statements) {
-        await tx.exec(statement);
-      }
-      await tx.run(
-        "INSERT INTO _migrations (id, name, checksum, applied_at, duration_ms) VALUES (?, ?, ?, ?, ?)",
-        [file.id, file.name, file.checksum, new Date().toISOString(), 0],
-      );
-    });
+    const rebuildsSqliteParentTable = db.dialect === "sqlite" && file.sql.includes("-- @sqlite-foreign-keys-off");
+    if (rebuildsSqliteParentTable) {
+      // SQLite cannot toggle FK enforcement inside a transaction. This marker is
+      // reserved for a new migration that rebuilds a parent table without
+      // renaming it; all DDL/data movement still occurs transactionally below.
+      await db.exec("PRAGMA foreign_keys = OFF");
+    }
+    try {
+      await db.transaction(async (tx) => {
+        for (const statement of statements) {
+          await tx.exec(statement);
+        }
+        if (rebuildsSqliteParentTable) {
+          const violations = await tx.query("PRAGMA foreign_key_check");
+          if (violations.length > 0) {
+            throw new Error(`${file.filename} would leave ${violations.length} foreign-key violation(s); the migration was rolled back`);
+          }
+        }
+        await tx.run(
+          "INSERT INTO _migrations (id, name, checksum, applied_at, duration_ms) VALUES (?, ?, ?, ?, ?)",
+          [file.id, file.name, file.checksum, new Date().toISOString(), 0],
+        );
+      });
+    } finally {
+      if (rebuildsSqliteParentTable) await db.exec("PRAGMA foreign_keys = ON");
+    }
     await db.run("UPDATE _migrations SET duration_ms = ? WHERE id = ?", [
       Date.now() - statementStarted,
       file.id,
