@@ -258,9 +258,9 @@ export interface OfferRow {
   project_id: string | null;
   status: OfferStatus;
   currency: string;
-  subtotal_minor: number;
+  subtotal_minor: number | null;
   discount_minor: number;
-  total_minor: number;
+  total_minor: number | null;
   internal_cost_minor: number;
   margin_pct: number | null;
   valid_until: string | null;

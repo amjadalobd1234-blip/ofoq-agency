@@ -187,6 +187,10 @@ export async function approveOffer(
   if (offer.status !== "SENT" && offer.status !== "DRAFT") {
     throw new PreconditionError("Only a sent offer can be approved");
   }
+  if (offer.total_minor === null || offer.subtotal_minor === null) {
+    throw new PreconditionError("This request has no published price and cannot be approved or invoiced yet");
+  }
+  const pricedOffer = { ...offer, total_minor: offer.total_minor, subtotal_minor: offer.subtotal_minor };
 
   await updateOffer(offerId, { status: "APPROVED", approved_at: nowIso() });
 
@@ -198,7 +202,7 @@ export async function approveOffer(
     await updateProject(projectId, { status: "AWAITING_PAYMENT" });
   }
 
-  const invoice = await createInvoiceFromOffer(offer, { actorUserId });
+  const invoice = await createInvoiceFromOffer(pricedOffer, { actorUserId });
 
   await logActivity({
     actor_type: "USER",
@@ -323,8 +327,8 @@ export interface ClientOfferView {
   code: string;
   status: OfferStatus;
   currency: string;
-  totalMinor: number;
-  subtotalMinor: number;
+  totalMinor: number | null;
+  subtotalMinor: number | null;
   discountMinor: number;
   validUntil: string | null;
   clientNote: string | null;
@@ -359,7 +363,7 @@ export async function toClientOfferView(offer: OfferWithItems, locale: Locale): 
       billing_type: item.billing_type,
       months: item.months,
     })),
-    canApprove: offer.status === "SENT" && (!offer.valid_until || offer.valid_until > nowIso()),
+    canApprove: offer.total_minor !== null && offer.subtotal_minor !== null && offer.status === "SENT" && (!offer.valid_until || offer.valid_until > nowIso()),
     canReject: offer.status === "SENT",
     policyNote,
   };

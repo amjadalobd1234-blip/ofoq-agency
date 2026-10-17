@@ -61,7 +61,7 @@ export interface StaffOverview {
     recentlyUpdated: { id: string; code: string; title: string; status: string; progress: number }[];
   };
   requests: {
-    newOffers: { id: string; code: string; totalMinor: number; currency: string; customer: string | null; createdByAgent: string | null; createdAt: string }[];
+    newOffers: { id: string; code: string; totalMinor: number | null; currency: string; customer: string | null; createdByAgent: string | null; createdAt: string }[];
     pendingOffers: number;
     approvedOffers: number;
     awaitingClient: number;
@@ -354,7 +354,7 @@ export interface ClientOverview {
   companyName: string | null;
   projectCount: number;
   activeProjects: { id: string; code: string; title: string; status: string; progress: number; dueDate: string | null }[];
-  pendingOffers: { id: string; code: string; totalMinor: number; currency: string; status: string; validUntil: string | null }[];
+  pendingOffers: { id: string; code: string; totalMinor: number | null; currency: string; status: string; validUntil: string | null }[];
   billing: { outstandingMinor: number; currency: string; paidMinor: number; nextRenewal: { planName: string; date: string } | null };
   unreadMessages: number;
   reports: { id: string; title: string; createdAt: string; type: string }[];

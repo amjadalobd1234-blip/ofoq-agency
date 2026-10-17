@@ -70,7 +70,7 @@ export interface SupportContext {
   locale: Locale;
   /** The client's own data, already scoped by the caller. */
   projects?: { code: string; title: string; status: string; progress: number; dueDate: string | null }[];
-  offers?: { code: string; status: string; totalMinor: number; currency: string }[];
+  offers?: { code: string; status: string; totalMinor: number | null; currency: string }[];
   invoices?: { number: string; status: string; totalMinor: number; paidMinor: number; currency: string; dueDate: string | null }[];
   subscriptions?: { planName: string; status: string; amountMinor: number; currency: string; nextRenewal: string | null; cancelAtPeriodEnd: boolean }[];
   lastReportTitle?: string | null;
@@ -225,10 +225,12 @@ async function composeAnswer(input: {
           escalate: false,
         };
       }
-      const lines = context.offers.map(
-        (offer) =>
-          `• ${offer.code} — ${translateStatus(offer.status, locale)} — ${formatMoney(offer.totalMinor, offer.currency, locale)}`,
-      );
+      const lines = context.offers.map((offer) => {
+        const price = offer.totalMinor === null
+          ? isAr ? "يحتاج مراجعة" : "Needs review"
+          : formatMoney(offer.totalMinor, offer.currency, locale);
+        return `• ${offer.code} — ${translateStatus(offer.status, locale)} — ${price}`;
+      });
       return {
         intent,
         text: isAr

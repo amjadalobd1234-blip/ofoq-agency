@@ -70,6 +70,11 @@ function minor(value: unknown): number | string {
   return typeof value === "string" ? value : num(value, 0);
 }
 
+/** Preserve SQL NULL for an offer that intentionally has no published price. */
+function nullableMinor(value: unknown): number | string | null {
+  return value === null || value === undefined ? null : minor(value);
+}
+
 /** Keeps a "missing" counter absent, so callers can still apply their fallback. */
 function optionalNum(value: unknown): number | undefined {
   return value === undefined || value === null ? undefined : num(value);
@@ -194,7 +199,7 @@ export interface AdminClientRow {
   country: string | null; status: string; createdAt: string;
 }
 export interface AdminOfferRow {
-  id: string; code: string; status: string; currency: string; totalMinor: number | string;
+  id: string; code: string; status: string; currency: string; totalMinor: number | string | null;
   createdByAgent: string | null; createdAt: string; customerName: string; customerEmail: string | null;
 }
 export interface AdminProjectRow {
@@ -305,7 +310,7 @@ export function normalizeAdminDashboard(raw: unknown): AdminDashboardData {
     })),
     requests: asRecords(r.requests).map((o): AdminOfferRow => ({
       id: str(o.id), code: str(o.code), status: requiredStr(o.status, "DRAFT"),
-      currency: requiredStr(o.currency, "USD"), totalMinor: minor(o.totalMinor),
+      currency: requiredStr(o.currency, "USD"), totalMinor: nullableMinor(o.totalMinor),
       createdByAgent: nullableStr(o.createdByAgent), createdAt: str(o.createdAt),
       customerName: str(o.customerName), customerEmail: nullableStr(o.customerEmail),
     })),

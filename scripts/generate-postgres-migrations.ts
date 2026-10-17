@@ -37,7 +37,10 @@ const MIGRATIONS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS public._migrations (
 /** Build all PostgreSQL migration contents without writing to disk. */
 export function renderPostgresMigrations(rootDir = process.cwd()): GeneratedMigration[] {
   const sourceDir = path.join(rootDir, "db", "migrations", "sqlite");
-  const sources = listMigrations(sourceDir);
+  const allSources = listMigrations(sourceDir);
+  // A dialect-specific table rebuild can carry an explicit PostgreSQL
+  // equivalent instead of translating SQLite PRAGMAs or silently omitting it.
+  const sources = allSources.filter((source) => !source.sql.includes("-- @postgres-skip:"));
   if (sources.length === 0) {
     throw new Error(`No SQLite migrations found in ${sourceDir}`);
   }
@@ -64,6 +67,25 @@ export function renderPostgresMigrations(rootDir = process.cwd()): GeneratedMigr
   const rlsSql = `${GENERATED_HEADER}\n-- Defense in depth for Supabase's exposed public schema.\n-- No client-facing policies are created; use the server-only DATABASE_URL.\n\n${formatStatements(rlsStatements)}`;
   generated.push(makeMigration("0003", "enable rls", "0003_enable_rls.sql", rlsSql));
 
+  let nextDialectMigrationId = Math.max(...generated.map((migration) => Number(migration.id))) + 1;
+  for (const source of allSources.filter((candidate) => candidate.sql.includes("-- @postgres-skip:"))) {
+    const equivalentStatements = [...source.sql.matchAll(/^-- @postgres-equivalent:\s*(.+)$/gm)].map((match) => match[1]!.trim());
+    if (equivalentStatements.length === 0) continue;
+    const nameMatch = /^-- @postgres-name:\s*(.+)$/m.exec(source.sql);
+    if (!nameMatch) throw new Error(`${source.filename} declares PostgreSQL SQL without -- @postgres-name`);
+    const id = String(nextDialectMigrationId++).padStart(4, "0");
+    const name = nameMatch[1]!.trim();
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+    const filename = `${id}_${slug}.sql`;
+    const sql = [
+      GENERATED_HEADER,
+      `-- PostgreSQL equivalent of ${source.filename}.`,
+      "",
+      formatStatements(equivalentStatements.flatMap((statement) => splitStatements(statement))),
+    ].join(String.fromCharCode(10));
+    generated.push(makeMigration(id, name, filename, sql));
+  }
+
   return generated;
 }
 
@@ -74,8 +96,8 @@ export function renderSupabaseSetupSql(migrations: GeneratedMigration[], rootDir
       "-- Ofoq / Supabase PostgreSQL setup",
       "-- Generated from db/migrations/sqlite/*.sql. Do not edit by hand.",
       "-- Regenerate with: npm run db:generate-postgres",
-      "-- Creates 35 application tables plus the _migrations tracking table, the",
-      "-- Supabase portal objects, and the ai_usage log (37 tables in total).",
+      "-- Creates 35 application tables plus _migrations, ai_usage, and the",
+      "-- private service-request price-verification table (38 tables in total).",
       "-- Safe to re-run: existing tables and indexes are left unchanged.",
       "-- The bundle also installs Supabase Auth triggers, RLS-safe REST RPCs, and column grants.",
       "-- Run this as the Supabase database owner (normally `postgres`).",

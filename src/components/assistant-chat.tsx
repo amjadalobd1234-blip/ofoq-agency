@@ -162,8 +162,8 @@ function saveFailureMessage(payload: { error?: unknown; code?: unknown } | null,
   const code = typeof payload?.code === "string" ? payload.code : "";
   if (code === "SERVICE_REQUEST_RPC_NOT_INSTALLED") {
     return ar
-      ? "قاعدة البيانات ما زالت بلا دالة حفظ الطلبات (0008_service_requests.sql غير مطبّقة)."
-      : "The database does not have the service-request function yet (0008_service_requests.sql is not applied).";
+      ? "قاعدة البيانات ما زالت بلا دالة حفظ الطلبات المحمية (0010_harden_service_requests_and_offer_access.sql غير مطبّق)."
+      : "The hardened service-request database migration is not applied yet (0010_harden_service_requests_and_offer_access.sql).";
   }
   if (status === 401 || code === "AUTH_REQUIRED") {
     return ar ? "انتهت جلستك، سجّل الدخول من جديد ثم أعد المحاولة." : "Your session expired; sign in again and retry.";

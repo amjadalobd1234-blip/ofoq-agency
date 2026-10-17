@@ -130,6 +130,20 @@ describe("guided service request — the offers row", () => {
     expect(plainText(record.summaryEn)).toContain("Expected impressions: 37,000 - 69,000");
   });
 
+  it("represents an unpublished `other` quote as NULL, never a displayed zero", () => {
+    const record = prepareServiceRequestOffer(whatsappRequest({
+      requestId: "req-other-null-1",
+      answers: { ...whatsappRequest().answers, type: "other" },
+    }));
+    expect(record.price).toEqual({ min: null, max: null, mid: null });
+    expect(record.offer.total_minor).toBeNull();
+    expect(record.offer.subtotal_minor).toBeNull();
+    const breakdown = JSON.parse(record.offer.pricing_breakdown) as Record<string, any>;
+    expect(breakdown.price).toEqual({ min: null, max: null, mid: null, currency: "USD" });
+    expect(record.summaryAr).toContain("يحتاج مراجعة");
+    expect(record.summaryAr).not.toContain("$0");
+  });
+
   it("shows the budget the client chose in the summary — the range, never the planning amount", () => {
     // Issue 4: the client pressed «200-500$» and the closing messages said
     // «ميزانيتك: $500». The mid price ($350) stays a calculation input only.
@@ -391,6 +405,18 @@ describe("guided service request — saving (local store)", () => {
         [TEMPORARY_CUSTOMER_ID],
       ),
     ).rejects.toThrow(/CHECK constraint failed/);
+  });
+
+  it("persists an unpriced local request with NULL amounts instead of zero", async () => {
+    const result = await submitServiceRequest(whatsappRequest({
+      requestId: "req-local-other-null-1",
+      answers: { ...whatsappRequest().answers, type: "other" },
+    }));
+    const row = await getDb().then((db) => db.get<{ subtotal_minor: number | null; total_minor: number | null }>(
+      "SELECT subtotal_minor, total_minor FROM offers WHERE id = ?",
+      [result.offerId],
+    ));
+    expect(row).toEqual({ subtotal_minor: null, total_minor: null });
   });
 
   it("records the submission in the activity log", async () => {

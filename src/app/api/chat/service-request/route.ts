@@ -20,7 +20,7 @@ export const runtime = "nodejs";
  *
  * The route validates every answer against the published options, then hands the
  * request to `submitServiceRequest()` with the Supabase store: one transaction
- * (RPC `ofoq_client_service_request`, migration 0008) writes the `offers` row
+ * (RPC `ofoq_client_service_request`, hardened by migration 0010) writes the `offers` row
  * (status DRAFT until the REQUESTED status lands) and the IMPORTANT /
  * NEW_REQUEST alert for /admin/alerts, then the owner is emailed through Resend.
  *
