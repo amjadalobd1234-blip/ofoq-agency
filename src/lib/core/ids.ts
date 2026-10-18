@@ -43,6 +43,24 @@ export function nextSequence(existing: string[], prefix: string, year = new Date
   return max + 1;
 }
 
+/** Formal offer numbering: OFOQ-2026-001 (sequence grows past 999 naturally). */
+export function formatOfferCode(sequence: number, year = new Date().getUTCFullYear()): string {
+  return `OFOQ-${year}-${String(sequence).padStart(3, "0")}`;
+}
+
+/** Next formal-offer sequence for the year, derived from existing OFOQ codes. */
+export function nextOfferSequence(existing: string[], year = new Date().getUTCFullYear()): number {
+  const pattern = new RegExp(`^OFOQ-${year}-(\\d+)$`);
+  let max = 0;
+  for (const reference of existing) {
+    const match = pattern.exec(reference);
+    if (!match) continue;
+    const value = Number(match[1]);
+    if (Number.isFinite(value) && value > max) max = value;
+  }
+  return max + 1;
+}
+
 /** Invoice numbering: INV-2026-0001. */
 export function formatInvoiceNumber(sequence: number, year = new Date().getUTCFullYear()): string {
   return `INV-${year}-${String(sequence).padStart(4, "0")}`;

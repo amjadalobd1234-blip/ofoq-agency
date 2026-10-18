@@ -1,9 +1,11 @@
 import { addDays, nowIso, toDateKey } from "@/lib/core/date";
-import { NotFoundError, PreconditionError } from "@/lib/core/errors";
+import { NotFoundError, PreconditionError, ValidationError } from "@/lib/core/errors";
 import { formatReference, nextSequence } from "@/lib/core/ids";
 import { formatMoney, marginPct } from "@/lib/core/money";
+import { assertCustomerAccess, requireCapability, type Actor } from "@/lib/auth/permissions";
 import type { CustomerRow, Locale, OfferItemRow, OfferRow, OfferStatus, OfferWithItems } from "@/lib/domain/types";
-import type { QuoteResult } from "@/lib/domain/pricing";
+import { buildQuote, type QuoteResult } from "@/lib/domain/pricing";
+import { listServices } from "@/lib/repositories/catalog.repo";
 import {
   addOfferItem,
   createOffer,
@@ -38,6 +40,8 @@ export interface CreateOfferInput {
   internalNote?: string | null;
   /** When true the offer is marked SENT immediately (used by the assistant). */
   send?: boolean;
+  /** Explicit unique code (e.g. OFOQ-2026-001 from the Offers Agent). */
+  code?: string;
 }
 
 /** Factor reasons plus escalation codes, so staff can see exactly why a price is what it is. */
@@ -49,7 +53,8 @@ function buildPricingReason(quote: QuoteResult): string {
 export async function createOfferFromQuote(input: CreateOfferInput): Promise<OfferWithItems> {
   const settings = await getAgencySettings();
   const codes = await listOfferCodes();
-  const code = formatReference("O", nextSequence(codes, "O"));
+  const code = input.code ?? formatReference("O", nextSequence(codes, "O"));
+  if (codes.includes(code)) throw new ValidationError(`Offer code ${code} already exists`, { field: "code" });
   const validUntil = addDays(new Date(), input.validForDays ?? 14).toISOString();
 
   const offer = await createOffer({
@@ -139,27 +144,123 @@ function defaultClientNote(
   return parts.join("\n");
 }
 
-export async function sendOffer(
-  offerId: string,
-  actor: { userId?: string | null; agentKey?: string | null; locale?: Locale },
-): Promise<OfferWithItems> {
+function isExpired(offer: OfferRow): boolean {
+  return Boolean(offer.valid_until && offer.valid_until <= nowIso());
+}
+
+function assertPriced(offer: OfferRow): void {
+  if (offer.total_minor === null || offer.subtotal_minor === null) {
+    throw new PreconditionError("This offer has no published price and cannot be sent or approved yet");
+  }
+}
+
+/**
+ * Owner/partner approval to send — the ONLY path from DRAFT to SENT.
+ *
+ * No agent and no client can send an offer: the actor must be staff with
+ * `offers.manage`. Sending never sends real email; it only publishes the
+ * offer to the client (dashboard/chat), which is the v1 delivery channel.
+ */
+export async function approveAndSendOffer(offerId: string, actor: Actor): Promise<OfferWithItems> {
+  requireCapability(actor, "offers.manage");
   const offer = await findOfferById(offerId);
   if (!offer) throw new NotFoundError("Offer not found");
-  if (offer.status === "APPROVED") throw new PreconditionError("This offer was already approved");
-  if (offer.status === "CANCELLED") throw new PreconditionError("This offer was cancelled");
+  if (offer.status !== "DRAFT") {
+    throw new PreconditionError(`Only a draft offer can be approved and sent (current: ${offer.status})`);
+  }
+  assertPriced(offer);
+  if (isExpired(offer)) throw new PreconditionError("This offer has expired; extend its validity before sending");
 
   await updateOffer(offerId, { status: "SENT" });
   await logActivity({
-    actor_type: actor.userId ? "USER" : actor.agentKey ? "AGENT" : "SYSTEM",
-    actor_user_id: actor.userId ?? null,
-    actor_label: actor.agentKey ?? null,
-    action: "offer.sent",
+    actor_type: "USER",
+    actor_user_id: actor.id,
+    action: "offer.owner_approved_and_sent",
     entity_type: "offer",
     entity_id: offerId,
     customer_id: offer.customer_id,
-    summary: `Offer ${offer.code} sent to the client`,
+    summary: `Offer ${offer.code} approved by owner/partner and sent to the client`,
   });
+  return (await findOfferById(offerId))!;
+}
 
+/** Backwards-compatible name; now strictly the owner-approved send above. */
+export async function sendOffer(offerId: string, actor: Actor): Promise<OfferWithItems> {
+  return approveAndSendOffer(offerId, actor);
+}
+
+export interface DraftOfferLineEdit { serviceSlug: string; quantity?: number; months?: number | null }
+export interface UpdateDraftOfferInput {
+  lines?: DraftOfferLineEdit[];
+  clientNote?: string | null;
+  internalNote?: string | null;
+  validForDays?: number;
+}
+
+/**
+ * Owner/partner review edit of a DRAFT offer. Prices are never taken from the
+ * caller: replacement lines are re-priced through the deterministic pricing
+ * engine from the service catalogue, so neither staff UI nor AI can invent a
+ * price through this path.
+ */
+export async function updateDraftOffer(
+  offerId: string,
+  actor: Actor,
+  input: UpdateDraftOfferInput,
+): Promise<OfferWithItems> {
+  requireCapability(actor, "offers.manage");
+  const offer = await findOfferById(offerId);
+  if (!offer) throw new NotFoundError("Offer not found");
+  if (offer.status !== "DRAFT") {
+    throw new PreconditionError(`Only a draft offer can be edited (current: ${offer.status})`);
+  }
+
+  const patch: Partial<OfferRow> = {};
+  if (input.clientNote !== undefined) patch.client_note = input.clientNote;
+  if (input.internalNote !== undefined) patch.internal_note = input.internalNote;
+  if (input.validForDays !== undefined) {
+    if (!Number.isFinite(input.validForDays) || input.validForDays <= 0) {
+      throw new ValidationError("validForDays must be a positive number", { field: "validForDays" });
+    }
+    patch.valid_until = addDays(new Date(), input.validForDays).toISOString();
+  }
+
+  if (input.lines !== undefined) {
+    if (input.lines.length === 0) throw new ValidationError("An offer needs at least one line", { field: "lines" });
+    const services = await listServices({ activeOnly: true });
+    const lines = input.lines.map((line) => {
+      const service = services.find((row) => row.slug === line.serviceSlug);
+      if (!service) throw new ValidationError(`Unknown service: ${line.serviceSlug}`, { field: "lines" });
+      return { service, quantity: line.quantity ?? 1, months: line.months ?? null };
+    });
+    const quote = buildQuote({ lines });
+    await deleteOfferItems(offerId);
+    let sortOrder = 0;
+    for (const line of quote.lines) {
+      await addOfferItem({
+        offer_id: offerId, service_id: line.serviceId, description_ar: line.nameAr, description_en: line.nameEn,
+        quantity: line.quantity, unit_price_minor: line.unitPriceMinor, billing_type: line.billingType,
+        months: line.months, total_minor: line.totalMinor, sort_order: sortOrder,
+      });
+      sortOrder += 1;
+    }
+    patch.subtotal_minor = quote.subtotalMinor;
+    patch.discount_minor = quote.discountMinor;
+    patch.total_minor = quote.totalMinor;
+    patch.internal_cost_minor = quote.internalCostMinor;
+    patch.margin_pct = marginPct(quote.totalMinor, quote.internalCostMinor);
+    patch.pricing_reason = buildPricingReason(quote);
+    patch.pricing_breakdown = JSON.stringify({ breakdown: quote.breakdown, escalations: quote.escalations, editedByOwner: true });
+    patch.currency = quote.currency;
+  }
+
+  if (Object.keys(patch).length) await updateOffer(offerId, patch);
+  await logActivity({
+    actor_type: "USER", actor_user_id: actor.id, action: "offer.draft_edited",
+    entity_type: "offer", entity_id: offerId, customer_id: offer.customer_id,
+    summary: `Draft offer ${offer.code} edited by owner/partner`,
+    meta: { repriced: input.lines !== undefined },
+  });
   return (await findOfferById(offerId))!;
 }
 
@@ -176,21 +277,32 @@ export interface OfferDecision {
  */
 export async function approveOffer(
   offerId: string,
-  actorUserId: string,
+  actor: Actor,
   options: { projectId?: string | null } = {},
 ): Promise<OfferDecision> {
   const offer = await findOfferById(offerId);
   if (!offer) throw new NotFoundError("Offer not found");
+  // Only the owning client may accept; staff acceptance on a client's behalf
+  // is deliberately not allowed through the client decision path.
+  if (actor.role !== "CLIENT") throw new PreconditionError("Only the client can accept an offer");
+  assertCustomerAccess(actor, offer.customer_id);
   if (offer.status === "APPROVED") {
     return { offer, projectId: offer.project_id, invoiceId: null };
   }
-  if (offer.status !== "SENT" && offer.status !== "DRAFT") {
+  if (offer.status !== "SENT") {
     throw new PreconditionError("Only a sent offer can be approved");
   }
-  if (offer.total_minor === null || offer.subtotal_minor === null) {
-    throw new PreconditionError("This request has no published price and cannot be approved or invoiced yet");
+  if (isExpired(offer)) {
+    await updateOffer(offerId, { status: "EXPIRED" });
+    throw new PreconditionError("This offer has expired");
   }
-  const pricedOffer = { ...offer, total_minor: offer.total_minor, subtotal_minor: offer.subtotal_minor };
+  assertPriced(offer);
+  const actorUserId = actor.id;
+  const pricedOffer: typeof offer & { total_minor: number; subtotal_minor: number } = {
+    ...offer,
+    total_minor: offer.total_minor as number,
+    subtotal_minor: offer.subtotal_minor as number,
+  };
 
   await updateOffer(offerId, { status: "APPROVED", approved_at: nowIso() });
 
@@ -221,15 +333,20 @@ export async function approveOffer(
 
 export async function rejectOffer(
   offerId: string,
-  actorUserId: string,
+  actor: Actor,
   reason?: string,
 ): Promise<OfferWithItems> {
   const offer = await findOfferById(offerId);
   if (!offer) throw new NotFoundError("Offer not found");
-  await updateOffer(offerId, { status: "REJECTED", rejected_at: nowIso(), internal_note: reason ?? null });
+  if (actor.role !== "CLIENT") throw new PreconditionError("Only the client can reject an offer");
+  assertCustomerAccess(actor, offer.customer_id);
+  if (offer.status !== "SENT") {
+    throw new PreconditionError("Only a sent offer can be rejected");
+  }
+  await updateOffer(offerId, { status: "REJECTED", rejected_at: nowIso(), internal_note: reason ?? offer.internal_note });
   await logActivity({
     actor_type: "USER",
-    actor_user_id: actorUserId,
+    actor_user_id: actor.id,
     action: "offer.rejected",
     entity_type: "offer",
     entity_id: offerId,
@@ -244,13 +361,14 @@ export async function rejectOffer(
 export async function reviseOffer(
   offerId: string,
   quote: QuoteResult,
-  actor: { userId?: string | null; agentKey?: string | null },
+  actor: Actor,
   note?: string,
 ): Promise<OfferWithItems> {
+  requireCapability(actor, "offers.manage");
   const offer = await findOfferById(offerId);
   if (!offer) throw new NotFoundError("Offer not found");
-  if (offer.status === "APPROVED") {
-    throw new PreconditionError("An approved offer cannot be edited. Create a new offer instead.");
+  if (offer.status !== "DRAFT") {
+    throw new PreconditionError("Only a draft offer can be revised; a sent offer needs a new offer instead.");
   }
 
   await deleteOfferItems(offerId);
@@ -279,15 +397,16 @@ export async function reviseOffer(
     margin_pct: marginPct(quote.totalMinor, quote.internalCostMinor),
     pricing_reason: buildPricingReason(quote),
     pricing_breakdown: JSON.stringify({ breakdown: quote.breakdown, escalations: quote.escalations }),
-    status: "SENT",
+    // A revision returns to DRAFT: it must be owner-approved again before sending.
+    status: "DRAFT",
     valid_until: addDays(new Date(), 14).toISOString(),
     internal_note: note ?? offer.internal_note,
   });
 
   await logActivity({
-    actor_type: actor.userId ? "USER" : "AGENT",
-    actor_user_id: actor.userId ?? null,
-    actor_label: actor.agentKey ?? null,
+    actor_type: "USER",
+    actor_user_id: actor.id,
+    actor_label: null,
     action: "offer.revised",
     entity_type: "offer",
     entity_id: offerId,
@@ -310,6 +429,21 @@ export async function getOffer(offerId: string): Promise<OfferWithItems> {
   const offer = await findOfferById(offerId);
   if (!offer) throw new NotFoundError("Offer not found");
   return offer;
+}
+
+/** Actor-scoped read: staff see everything; a client only their own offer, and only once SENT+. */
+export async function getOfferForActor(offerId: string, actor: Actor): Promise<OfferWithItems> {
+  requireCapability(actor, "offers.view");
+  const offer = await getOffer(offerId);
+  assertCustomerAccess(actor, offer.customer_id);
+  if (actor.role === "CLIENT" && offer.status === "DRAFT") throw new NotFoundError("Offer not found");
+  return offer;
+}
+
+/** Actor-scoped client view (no internal cost/margin/notes — see toClientOfferView). */
+export async function getClientOfferView(offerId: string, actor: Actor, locale: Locale) {
+  const offer = await getOfferForActor(offerId, actor);
+  return toClientOfferView(offer, locale);
 }
 
 export async function expireOldOffers(): Promise<number> {

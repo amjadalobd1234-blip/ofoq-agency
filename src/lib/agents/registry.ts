@@ -18,6 +18,7 @@ export type AgentKey =
   | "needs_analyst"
   | "pricing"
   | "proposal_writer"
+  | "offers"
   | "project_manager"
   | "content"
   | "ads_manager"
@@ -95,10 +96,23 @@ export const AGENT_DEFINITIONS: AgentDefinition[] = [
     category: "sales",
     descriptionAr: "يحوّل الاحتياج والسعر إلى عرض واضح ثنائي اللغة مع البنود والمدة وسياسة الإلغاء والاسترجاع.",
     descriptionEn: "Turns the need and the price into a clear bilingual offer with line items, timeline and the cancellation/refund policy.",
-    autonomiesAr: ["إنشاء عرض مسودة", "إرسال عرض جاهز للعميل"],
-    autonomiesEn: ["Create a draft offer", "Send a ready offer to the client"],
-    forbiddenAr: ["تعديل بند معتمد من العميل دون إشعار"],
-    forbiddenEn: ["Silently change an approved line item"],
+    autonomiesAr: ["إنشاء عرض مسودة"],
+    autonomiesEn: ["Create a draft offer"],
+    forbiddenAr: ["تعديل بند معتمد من العميل دون إشعار", "إرسال عرض دون موافقة المالك"],
+    forbiddenEn: ["Silently change an approved line item", "Send an offer without owner approval"],
+    defaultRisk: "MEDIUM",
+  },
+  {
+    key: "offers",
+    nameAr: "وكيل العروض",
+    nameEn: "Offers agent",
+    category: "sales",
+    descriptionAr: "ينشئ مسودة عرض رسمي مرقّمة من أسعار وكيل التسعير فقط، مع البنود والشروط وتاريخ الانتهاء، وينتظر موافقة المالك قبل الإرسال.",
+    descriptionEn: "Creates a numbered formal offer draft using only Pricing Agent prices, with line items, terms and an expiry date, and waits for owner approval before sending.",
+    autonomiesAr: ["إنشاء مسودة عرض", "ترقيم العرض", "إرفاق الشروط وتاريخ الانتهاء"],
+    autonomiesEn: ["Create an offer draft", "Number the offer", "Attach terms and expiry"],
+    forbiddenAr: ["اختراع أسعار", "إرسال عرض دون موافقة المالك", "إظهار التكاليف أو الهوامش الداخلية للعميل", "قبول أو رفض العرض نيابة عن العميل"],
+    forbiddenEn: ["Invent prices", "Send an offer without owner approval", "Show internal costs or margins to the client", "Accept or reject an offer on the client's behalf"],
     defaultRisk: "MEDIUM",
   },
   {

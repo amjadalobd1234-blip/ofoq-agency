@@ -77,6 +77,10 @@ export async function buildProposal(input: {
     }),
   );
 
+  // Owner approval is mandatory before any offer reaches a client (Offers
+  // Agent rule): proposals are ALWAYS drafts here, whatever the caller or the
+  // pricing outcome suggested. Sending happens only via approveAndSendOffer.
+  void input.send;
   const offer = await createOfferFromQuote({
     customer,
     quote: pricing.quote,
@@ -84,10 +88,10 @@ export async function buildProposal(input: {
     locale,
     createdByAgent: "proposal_writer",
     createdByUserId: input.createdByUserId ?? null,
-    send: input.send ?? pricing.autoApproved,
+    send: false,
   });
 
-  const requiresApproval = !pricing.autoApproved;
+  const requiresApproval = true;
 
   await runAgent(
     "proposal_writer",
@@ -147,7 +151,7 @@ export async function buildProposal(input: {
     });
   }
 
-  return { project, offer, sentToClient: !requiresApproval, requiresApproval };
+  return { project, offer, sentToClient: false, requiresApproval };
 }
 
 function buildBrief(profile: RequirementProfile, locale: Locale): string {
