@@ -14,8 +14,21 @@ interface Project {
 interface Offer {
   id: string; code: string; status: string; currency: string; totalMinor: number | string | null;
   validUntil?: string | null; clientNote?: string | null;
-  items?: Array<{ descriptionAr: string; descriptionEn?: string | null; billingType: string; months?: number | null }>;
+  items?: Array<{ descriptionAr: string; descriptionEn?: string | null; billingType: string; months?: number | null; unitPriceMinor?: number | string; totalMinor?: number | string }>;
 }
+
+/** Services a client can ask a formal offer for (catalogue slugs). */
+const FORMAL_OFFER_SERVICES: Array<{ slug: string; ar: string; en: string }> = [
+  { slug: "social-media-management", ar: "إدارة حسابات التواصل", en: "Social media management" },
+  { slug: "content-design", ar: "كتابة وتصميم المنشورات", en: "Post writing and design" },
+  { slug: "content-strategy", ar: "خطة المحتوى والنشر", en: "Content strategy and calendar" },
+  { slug: "paid-ads", ar: "إدارة الإعلانات المدفوعة", en: "Paid ads management" },
+  { slug: "branding", ar: "الهوية والمواد التسويقية", en: "Branding and marketing materials" },
+  { slug: "web-development", ar: "إنشاء وتطوير المواقع", en: "Website development" },
+  { slug: "seo", ar: "تحسين محركات البحث", en: "SEO" },
+  { slug: "analytics-reports", ar: "تحليل الأداء والتقارير", en: "Analytics and reporting" },
+  { slug: "consulting", ar: "استشارات وخطط تسويقية", en: "Consulting and marketing plans" },
+];
 interface Invoice {
   id: string; number: string; currency: string; totalMinor: number | string; amountPaidMinor: number | string;
   status: string; issuedAt?: string | null; dueAt?: string | null; notes?: string | null;
@@ -41,6 +54,51 @@ export function ClientDashboard({ locale }: { locale: Locale }) {
   const [data, setData] = useState<PortalData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [offerService, setOfferService] = useState(FORMAL_OFFER_SERVICES[0]!.slug);
+  const [offerBusy, setOfferBusy] = useState<string | null>(null);
+  const [offerNotice, setOfferNotice] = useState("");
+
+  /** Asks for a formal offer: creates a DRAFT for owner approval — never sent to the client as-is. */
+  async function requestFormalOffer() {
+    setOfferBusy("request");
+    setOfferNotice("");
+    try {
+      const response = await fetch("/api/offers", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ services: [offerService] }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Request failed");
+      setOfferNotice(ar
+        ? `تم إنشاء مسودة العرض ${payload.data.code} وهي بانتظار مراجعة المالك وموافقته قبل إرسالها إليك.`
+        : `Draft offer ${payload.data.code} was created and is waiting for owner review and approval before it is sent to you.`);
+    } catch (reason) {
+      setOfferNotice(reason instanceof Error ? reason.message : String(reason));
+    } finally { setOfferBusy(null); }
+  }
+
+  /** The client's final decision on a SENT offer (accept / reject). */
+  async function decideOffer(offer: Offer, decision: "accept" | "reject") {
+    setOfferBusy(offer.id);
+    setOfferNotice("");
+    try {
+      const response = await fetch(`/api/offers/${encodeURIComponent(offer.id)}/decision`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Decision failed");
+      setData((current) => current ? {
+        ...current,
+        offers: current.offers.map((item) => item.id === offer.id ? { ...item, status: payload.data.status } : item),
+      } : current);
+      setOfferNotice(decision === "accept"
+        ? (ar ? `تم قبول العرض ${offer.code}. ستصدر فاتورة، ولا يتم أي دفع تلقائي.` : `Offer ${offer.code} accepted. An invoice will be issued; no automatic payment is taken.`)
+        : (ar ? `تم رفض العرض ${offer.code}.` : `Offer ${offer.code} rejected.`));
+    } catch (reason) {
+      setOfferNotice(reason instanceof Error ? reason.message : String(reason));
+    } finally { setOfferBusy(null); }
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -120,11 +178,30 @@ export function ClientDashboard({ locale }: { locale: Locale }) {
 
         <section className="platform-card content-card" aria-labelledby="offers-heading">
           <div className="card-heading-row"><div><span className="eyebrow">02 / {copy.dashboard.requests}</span><h2 id="offers-heading">{portal.offers}</h2></div><span className="mini-count">{data.offers.length}</span></div>
+          <form className="offer-request-form" onSubmit={(event) => { event.preventDefault(); void requestFormalOffer(); }}>
+            <label>
+              <span>{ar ? "اطلب عرضًا رسميًا" : "Request a formal offer"}</span>
+              <select value={offerService} onChange={(event) => setOfferService(event.target.value)}>
+                {FORMAL_OFFER_SERVICES.map((service) => <option key={service.slug} value={service.slug}>{ar ? service.ar : service.en}</option>)}
+              </select>
+            </label>
+            <button className="button button-gold" type="submit" disabled={offerBusy === "request"}>{ar ? "طلب عرض رسمي" : "Request formal offer"}</button>
+          </form>
+          {offerNotice && <p className="row-meta" role="status">{offerNotice}</p>}
           {data.offers.length === 0 ? <EmptyState text={portal.noOffers} /> : (
             <div className="compact-list">
               {data.offers.map((offer) => <article className="compact-row" key={offer.id}>
-                <div className="compact-row-copy"><strong>{offer.code}</strong><span>{offer.items?.[0] ? (ar ? offer.items[0].descriptionAr : offer.items[0].descriptionEn || offer.items[0].descriptionAr) : (ar ? "عرض مخصص" : "Custom offer")}</span></div>
-                <div className="compact-row-side"><strong>{offer.totalMinor === null ? (ar ? "يحتاج مراجعة" : "Needs review") : formatMoney(offer.totalMinor, offer.currency, locale)}</strong><StatusPill status={offer.status} locale={locale} /></div>
+                <div className="compact-row-copy"><strong>{offer.code}</strong>
+                  {(offer.items ?? []).map((item, index) => <span key={index}>{ar ? item.descriptionAr : item.descriptionEn || item.descriptionAr}{item.totalMinor !== undefined ? ` — ${formatMoney(item.totalMinor, offer.currency, locale)}` : ""}</span>)}
+                  {offer.validUntil && <span>{ar ? "صالح حتى" : "Valid until"}: {formatDate(offer.validUntil, locale)}</span>}
+                  {offer.clientNote && <span>{offer.clientNote}</span>}
+                </div>
+                <div className="compact-row-side"><strong>{offer.totalMinor === null ? (ar ? "يحتاج مراجعة" : "Needs review") : formatMoney(offer.totalMinor, offer.currency, locale)}</strong><StatusPill status={offer.status} locale={locale} />
+                  {offer.status === "SENT" && <>
+                    <button type="button" disabled={offerBusy === offer.id} onClick={() => void decideOffer(offer, "accept")}>{ar ? "قبول العرض" : "Accept offer"}</button>
+                    <button type="button" disabled={offerBusy === offer.id} onClick={() => void decideOffer(offer, "reject")}>{ar ? "رفض العرض" : "Reject offer"}</button>
+                  </>}
+                </div>
               </article>)}
             </div>
           )}
