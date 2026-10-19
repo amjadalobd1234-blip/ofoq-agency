@@ -17,6 +17,8 @@ interface Call { url: string; method: string; body: unknown }
 
 const calls: Call[] = [];
 let responses: Record<string, unknown> = {};
+/** Per-route status codes, so a test can simulate a failing endpoint. */
+let statuses: Record<string, number> = {};
 
 function stubFetch(): void {
   vi.stubGlobal(
@@ -27,7 +29,8 @@ function stubFetch(): void {
       calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : null });
       const key = `${method} ${url.split("?")[0]!}`;
       const payload = responses[key] ?? responses[url.split("?")[0]!] ?? { data: {} };
-      return Response.json(payload, { status: 200, headers: { "Content-Type": "application/json" } });
+      const status = statuses[key] ?? statuses[url.split("?")[0]!] ?? 200;
+      return Response.json(payload, { status, headers: { "Content-Type": "application/json" } });
     }),
   );
 }
@@ -35,6 +38,7 @@ function stubFetch(): void {
 beforeEach(() => {
   calls.length = 0;
   responses = {};
+  statuses = {};
   stubFetch();
 });
 
@@ -195,5 +199,53 @@ describe("the client portal — the project plan", () => {
     // The client portal never asks for anything but its own projects.
     const listCall = calls.find((call) => call.url === "/api/projects");
     expect(listCall).toBeTruthy();
+  });
+
+  it("shows the approved plan from the Supabase payload when the local API is unavailable", async () => {
+    // The production deployment (Cloudflare/Netlify + Supabase) has no
+    // DATABASE_URL: the local Projects API answers 503 and the portal keeps
+    // working from the dashboard RPC — the approved plan included.
+    statuses["GET /api/projects"] = 503;
+    statuses["GET /api/projects/p-1"] = 503;
+    responses["GET /api/dashboard"] = {
+      data: {
+        customer: { id: "c-1", name: "عميل", companyName: "شركة العميل", email: null, locale: "ar" },
+        projects: [
+          {
+            id: "p-1", code: "OFQ-P-001", title: "إدارة حسابات التواصل", titleEn: "Social media",
+            status: "IN_PROGRESS", progress: 50, dueDate: "2026-11-30", tasks: [],
+            plan: {
+              version: 1, status: "APPROVED", approvedAt: "2026-10-05T00:00:00.000Z",
+              summary: "خطة معتمدة من المالك",
+              phases: [
+                {
+                  key: "PREPARATION", title: "التحضير والتخطيط", dueDate: "2026-10-20",
+                  tasks: [
+                    { title: "إعداد خطة النشر الأسبوعية", status: "DONE", dueDate: "2026-10-10" },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+        offers: [], invoices: [], payments: [], subscriptions: [], campaigns: [], reports: [], files: [],
+      },
+    };
+
+    render(<ClientDashboard locale="ar" />);
+
+    await waitFor(() => expect(screen.getByText(/OFQ-P-001/)).toBeTruthy());
+    // The progress comes from the dashboard payload when the local API is down.
+    await waitFor(() => expect(screen.getByText("50%")).toBeTruthy());
+    // The plan line shows the approved version.
+    await waitFor(() => expect(screen.getByText(/الخطة: v1/)).toBeTruthy());
+
+    fireEvent.click(screen.getByText("عرض الخطة والمراحل"));
+    await waitFor(() => expect(screen.getByText("التحضير والتخطيط")).toBeTruthy());
+    expect(screen.getByText("إعداد خطة النشر الأسبوعية")).toBeTruthy();
+    expect(screen.getByText("خطة معتمدة من المالك")).toBeTruthy();
+
+    // The detail route was not needed: the plan came from the RPC payload.
+    expect(calls.some((call) => call.url.startsWith("/api/projects/p-1"))).toBe(false);
   });
 });

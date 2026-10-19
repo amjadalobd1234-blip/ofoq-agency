@@ -10,6 +10,21 @@ interface Project {
   status: string; progress: number; currency: string; amountTotalMinor: number | string;
   startDate?: string | null; dueDate?: string | null;
   tasks?: Array<{ id: string; title: string; titleEn?: string | null; status: string; dueDate?: string | null }>;
+  /**
+   * The approved plan, as the client dashboard RPC returns it.
+   *
+   * In production the portal reads Supabase directly, so this is where the
+   * plan comes from — no DATABASE_URL and no local database involved.
+   */
+  plan?: ClientPlan | null;
+}
+/** The client-safe plan: phases and their client-visible tasks. */
+interface ClientPlan {
+  version: number;
+  status: string;
+  approvedAt?: string | null;
+  summary?: string | null;
+  phases: { key: string; title: string; dueDate?: string | null; tasks: { title: string; status: string; dueDate?: string | null }[] }[];
 }
 interface Offer {
   id: string; code: string; status: string; currency: string; totalMinor: number | string | null;
@@ -57,10 +72,7 @@ interface ClientProject {
 /** The client-safe detail served by GET /api/projects/[id]. */
 interface ClientProjectDetail {
   project: { id: string; code: string; title: string; status: string; progress: number; dueDate: string | null; daysRemaining?: number | null };
-  plan: {
-    version: number; status: string; approvedAt: string | null; summary: string | null;
-    phases: { key: string; title: string; dueDate: string | null; tasks: { title: string; status: string; dueDate: string | null }[] }[];
-  } | null;
+  plan: ClientPlan | null;
   tasks: { id: string; title: string; status: string; dueDate: string | null }[];
 }
 
@@ -77,6 +89,7 @@ export function ClientDashboard({ locale }: { locale: Locale }) {
   // The Projects Agent: the progress and the plan the client is allowed to see.
   const [trackedProjects, setTrackedProjects] = useState<ClientProject[] | null>(null);
   const [projectDetails, setProjectDetails] = useState<Record<string, ClientProjectDetail>>({});
+  const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
   const [projectBusy, setProjectBusy] = useState<string | null>(null);
 
   /** Loads the client-safe project list (progress + plan state). */
@@ -96,6 +109,25 @@ export function ClientDashboard({ locale }: { locale: Locale }) {
       .finally(() => { if (!controller.signal.aborted) setProjectBusy(null); });
     return () => controller.abort();
   }, []);
+
+  /**
+   * Shows (or hides) the plan of one project.
+   *
+   * The plan itself comes from the dashboard payload when the deployment
+   * answers through Supabase (production) — the local Projects API is only
+   * called when the payload carries no phase yet (local development).
+   */
+  function toggleProjectPlan(project: Project) {
+    const expanded = expandedProjects[project.id] ?? Boolean(projectDetails[project.id]);
+    if (expanded) {
+      setExpandedProjects((current) => ({ ...current, [project.id]: false }));
+      return;
+    }
+    setExpandedProjects((current) => ({ ...current, [project.id]: true }));
+    if (projectDetails[project.id]) return;
+    if ((project.plan?.phases?.length ?? 0) > 0) return;
+    void openProjectPlan(project.id);
+  }
 
   /** Opens the plan of one project: the phases and the tasks the client sees. */
   async function openProjectPlan(projectId: string) {
@@ -226,6 +258,8 @@ export function ClientDashboard({ locale }: { locale: Locale }) {
               {data.projects.map((project) => {
                 const tracked = trackedProjects?.find((entry) => entry.id === project.id) ?? null;
                 const detail = projectDetails[project.id] ?? null;
+                const plan = detail?.plan ?? project.plan ?? null;
+                const expanded = expandedProjects[project.id] ?? Boolean(detail);
                 const progress = Math.min(100, Math.max(0, Number(tracked?.progress ?? project.progress) || 0));
                 return (
                 <article className="project-row" key={project.id}>
@@ -235,23 +269,23 @@ export function ClientDashboard({ locale }: { locale: Locale }) {
                     <div className="progress-track"><span style={{ width: `${progress}%` }} /></div>
                     {project.dueDate && <p className="row-meta">{portal.dueDate}: {formatDate(project.dueDate, locale)}</p>}
                     {project.tasks && project.tasks.length > 0 && <p className="row-meta">{ar ? `المراحل الظاهرة لك: ${project.tasks.filter((task) => task.status === "DONE").length} من ${project.tasks.length}` : `Visible stages: ${project.tasks.filter((task) => task.status === "DONE").length} of ${project.tasks.length}`}</p>}
-                    {tracked?.plan && (
+                    {plan && (
                       <p className="row-meta">
-                        {ar ? "الخطة" : "Plan"}: v{tracked.plan.version} ·{" "}
-                        {tracked.plan.status === "APPROVED"
+                        {ar ? "الخطة" : "Plan"}: v{plan.version} ·{" "}
+                        {plan.status === "APPROVED"
                           ? (ar ? "معتمدة" : "approved")
                           : (ar ? "قيد المراجعة" : "under review")}
                       </p>
                     )}
                     <div className="offer-admin-actions">
-                      <button type="button" disabled={projectBusy === project.id} onClick={() => void openProjectPlan(project.id)}>
-                        {detail ? (ar ? "إخفاء الخطة" : "Hide the plan") : ar ? "عرض الخطة والمراحل" : "Show the plan and phases"}
+                      <button type="button" disabled={projectBusy === project.id} onClick={() => toggleProjectPlan(project)}>
+                        {expanded ? (ar ? "إخفاء الخطة" : "Hide the plan") : ar ? "عرض الخطة والمراحل" : "Show the plan and phases"}
                       </button>
                     </div>
-                    {detail?.plan && detail.plan.phases.length > 0 && (
+                    {expanded && plan && plan.phases.length > 0 && (
                       <div className="client-plan">
-                        {detail.plan.summary && <p className="row-meta">{detail.plan.summary}</p>}
-                        {detail.plan.phases.map((phase) => (
+                        {plan.summary && <p className="row-meta">{plan.summary}</p>}
+                        {plan.phases.map((phase) => (
                           <div className="client-plan-phase" key={phase.key}>
                             <div className="client-plan-phase-head">
                               <strong>{phase.title}</strong>

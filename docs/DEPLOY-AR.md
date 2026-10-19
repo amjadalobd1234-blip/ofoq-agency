@@ -113,6 +113,52 @@ WHERE lower(email) = lower('owner@example.com');
 
 **لا تضف** `SUPABASE_SERVICE_ROLE_KEY` أو `DATABASE_URL` إلى واجهات المتصفح. لا يحتاج العميل إلى بيانات بطاقة؛ الدفع الإلكتروني غير مفعّل حاليًا، والفواتير اليدوية فقط ظاهرة كحالة غير مفعّلة.
 
+## 3-ج. واجهات إدارة المشاريع (Projects API) — متطلب `DATABASE_URL`
+
+بوابة العميل وواجهات Auth/المحادثة تعمل عبر Supabase REST فقط ولا تحتاج أي سر قاعدة
+بيانات. أما **واجهات إدارة المشاريع** (`/api/projects*`: إنشاء مشروع، اعتماد خطة، تحديث
+مهمة، إغلاق، مراقبة) فهي تعمل على محرّك البيانات المحلي في المستودع، أي تحتاج قاعدة
+بيانات حقيقية في الإنتاج.
+
+**ما هو متاح اليوم في إعدادات الإنتاج:** `NEXT_PUBLIC_SUPABASE_URL` و
+`NEXT_PUBLIC_SUPABASE_ANON_KEY` فقط. **لا يوجد `DATABASE_URL` في الإعدادات الحالية**،
+ولن يضيفه هذا المستودع تلقائيًا — هو إعداد خارجي يُنفَّذ من قِبل المالك.
+
+**ما يجب ضبطه (Netlify: Environment variables / Cloudflare Pages: Variables and Secrets):**
+
+| المتغير | القيمة | ملاحظة |
+| --- | --- | --- |
+| `DATABASE_DRIVER` | `postgres` | إلزامي مع `DATABASE_URL`؛ بدونه يستخدم التطبيق المخزن المحلي |
+| `DATABASE_URL` | رابط اتصال مشروع Supabase (سر) | من Project Settings → Database → Connection string (السلسلة المباشرة أو الـ pooler) مع `sslmode=require` |
+
+مثال الشكل (القيم الحقيقية من لوحة Supabase، ولا تُنشر في Git):
+
+```text
+DATABASE_DRIVER=postgres
+DATABASE_URL=postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres?sslmode=require
+```
+
+**خطوات التفعيل (من قِبل المالك، خارج هذا الـ PR):**
+
+1. ضبط `DATABASE_DRIVER=postgres` و`DATABASE_URL` كسر في إعدادات النشر.
+2. تطبيق ترحيلات Postgres على نفس القاعدة:
+   ```bash
+   DATABASE_DRIVER=postgres DATABASE_URL="<the same secret>" npm run db:migrate
+   ```
+   (المولَّد: `npm run db:generate-postgres` — ينتج `db/migrations/postgres/*.sql`).
+3. تطبيق ترحيل Supabase `db/migrations/supabase/0011_project_plans.sql` يدويًا في
+   SQL Editor (لم يُطبَّق من هذا المستودع).
+
+**سلوك التطبيق在没有 هذا الإعداد:** لا يوجد سقوط صامت. عند غياب `DATABASE_URL` مع
+`DATABASE_DRIVER=postgres` تردّ المسارات بـ `503` ورمز `CONFIGURATION_ERROR` ورسالة تذكر
+المتغيّر المطلوب؛ وإذا كان المخزن المحلي غير قابل للفتح (نشر بلا قرص دائم) تردّ المسارات
+بـ `503` أيضًا بدل خطأ `500` مبهم أو — وهو الأخطر — الكتابة في قاعدة محلية معزولة
+والاعتقاد بأننا نعمل على قاعدة الإنتاج.
+
+**ما يعمل بدون `DATABASE_URL`:** بوابة العميل (تقدّم المشروع، الخطة المعتمدة، المراحل)
+تقرأ `ofoq_client_dashboard()` من Supabase عبر HTTPS، وتعرض الخطة المعتمدة بعد تطبيق
+ترحيل 0011. أما إنشاء/اعتماد/إغلاق مشروع من لوحة الإدارة فيحتاج `DATABASE_URL`.
+
 ## 3-ب. وضع الوسيط — تجاوز حجب `*.supabase.co` (العراق ودول أخرى)
 
 يستخدم بعض مزودي الإنترنت حجبًا على مستوى الشبكة لنطاق `supabase.co` بالكامل (بينما يبقى نطاق لوحة التحكم `supabase.com` متاحًا). النتيجة: `Failed to fetch` في التسجيل والدخول من تلك الشبكات حتى مع تطبيق سليم وإعدادات صحيحة.
@@ -184,3 +230,5 @@ npm run build
 ## 7. ملاحظة حول طبقة البيانات السابقة
 
 يحتفظ المستودع بطبقة SQLite وخدمات الوكالة الحالية للتطوير المحلي والتوافق مع أدواتها. صفحات Auth/بوابة العميل/المحادثة الجديدة تستخدم Supabase REST فقط عند إعداد `NEXT_PUBLIC_SUPABASE_*`. لا تشغّل موصل PostgreSQL `pg` من Arena ولا تضع رابط قاعدة البيانات في متغيرات النشر لهذه الواجهات.
+
+**استثناء واحد (مطلوب من المالك):** واجهات إدارة المشاريع (`/api/projects*`) تحتاج قاعدة PostgreSQL حقيقية في الإنتاج — راجع §3-ج. هذا الاستثناء متعلق بواجهات الإدارة (الكتابة على المشاريع)، ولا يمس بوابة العميل التي تقرأ Supabase عبر RPC دون أي سر.

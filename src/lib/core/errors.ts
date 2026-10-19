@@ -15,6 +15,7 @@ export type ErrorCode =
   | "RATE_LIMITED"
   | "INTEGRATION_DISABLED"
   | "PRECONDITION_FAILED"
+  | "CONFIGURATION_ERROR"
   | "INTERNAL";
 
 export class AppError extends Error {
@@ -91,6 +92,20 @@ export class IntegrationDisabledError extends AppError {
   ) {
     super("INTEGRATION_DISABLED", message, 503, details);
     this.name = "IntegrationDisabledError";
+  }
+}
+
+/**
+ * Thrown when the deployment is missing a setting the request needs — for
+ * example the platform database in a serverless deployment.
+ *
+ * It is a 503: the request is valid, the deployment is not ready for it. The
+ * message is written for the operator and says exactly which variable to set.
+ */
+export class ConfigurationError extends AppError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("CONFIGURATION_ERROR", message, 503, details);
+    this.name = "ConfigurationError";
   }
 }
 
