@@ -2449,3 +2449,49 @@ button:disabled {
 .offer-admin-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .offer-admin-actions input { width: 110px; }
 .compact-row-side button { cursor: pointer; }
+
+/* Projects Agent wiring: the owner workspace and the client plan view. */
+.admin-projects-panel { display: grid; gap: 10px; }
+.admin-task-list { display: grid; gap: 6px; margin-top: 8px; }
+.admin-task-row {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) 120px 160px auto;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.admin-task-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-task-row input { min-height: 30px; }
+.admin-plan-editor {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 9px;
+  border: 1px dashed rgba(201, 162, 39, 0.35);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.admin-plan-phase { display: grid; gap: 5px; padding: 7px; border-radius: 6px; background: rgba(0, 0, 0, 0.18); }
+.admin-plan-phase-head { display: grid !important; grid-template-columns: minmax(0, 1fr) 150px auto; gap: 6px; align-items: center; }
+.admin-plan-task { display: grid !important; grid-template-columns: minmax(0, 1fr) 150px 150px auto; gap: 6px; align-items: center; }
+.admin-plan-task input, .admin-plan-task select { min-height: 30px; }
+.client-plan { display: grid; gap: 8px; margin-top: 9px; }
+.client-plan-phase { border-inline-start: 2px solid rgba(201, 162, 39, 0.45); padding-inline-start: 9px; }
+.client-plan-phase-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.client-plan-phase-head strong { color: #e2ded6; font-size: 11px; font-weight: 600; }
+.client-plan-phase ul { display: grid; gap: 4px; margin: 5px 0 0; padding: 0; list-style: none; }
+.client-plan-phase li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #a7a196;
+  font-size: 10px;
+}
+@media (max-width: 720px) {
+  .admin-task-row { grid-template-columns: minmax(0, 1fr); }
+  .admin-plan-phase-head, .admin-plan-task { grid-template-columns: minmax(0, 1fr); }
+}

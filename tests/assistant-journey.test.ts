@@ -106,9 +106,20 @@ describe("assistant client journey", () => {
     const projects = await listCustomerProjects(customerId);
     expect(projects.total).toBeGreaterThanOrEqual(1);
     const project = projects.rows[0]!;
-    expect(project.ai_plan).toBeTruthy();
 
-    // A plan exists with client-visible tasks, and progress starts at 0.
+    // The delivery agent only *proposes* a plan: it is stored as a draft on
+    // the project_plans table and waits for the owner's approval.
+    const plans = await getDb().then((db) =>
+      db.query<{ status: string; created_by_agent: string | null }>(
+        "SELECT status, created_by_agent FROM project_plans WHERE project_id = ?",
+        [project.id],
+      ),
+    );
+    expect(plans.length).toBeGreaterThan(0);
+    expect(plans.every((plan) => plan.status === "DRAFT")).toBe(true);
+    expect(plans.some((plan) => plan.created_by_agent === "project_manager")).toBe(true);
+
+    // The proposal carries client-visible tasks, and progress starts at 0.
     const tasks = await getDb().then((db) =>
       db.query<{ visibility: string }>("SELECT visibility FROM project_tasks WHERE project_id = ?", [project.id]),
     );

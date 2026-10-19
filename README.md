@@ -22,7 +22,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY="<public-anon-or-publishable-key>"
 
 ## إعداد Supabase ونشر Netlify
 
-اقرأ [دليل النشر العربي](docs/DEPLOY-AR.md)، ثم نفّذ `docs/setup/supabase-setup.sql` في Supabase SQL Editor. وعند تعذّر ظهور بيانات التنبيهات رغم أنها تعمل في SQL: [تفاصيل التنبيه والتشخيص](docs/ADMIN-ALERTS-AR.md) و`GET /api/debug/alerts`. طلب الخدمة الموجّه في الدردشة (الحفظ كتنبيه `NEW_REQUEST`، بيانات واتساب، تعديل الميزانية، وحالة `DRAFT` المؤقتة): [طلبات الخدمة](docs/SERVICE-REQUESTS-AR.md). يستخدم التطبيق Supabase Auth وData API عبر HTTPS مع RLS/RPC؛ لا يحتاج نشر الواجهة الجديدة إلى اتصال PostgreSQL مباشر.
+اقرأ [دليل النشر العربي](docs/DEPLOY-AR.md)، ثم نفّذ `docs/setup/supabase-setup.sql` في Supabase SQL Editor. وعند تعذّر ظهور بيانات التنبيهات رغم أنها تعمل في SQL: [تفاصيل التنبيه والتشخيص](docs/ADMIN-ALERTS-AR.md) و`GET /api/debug/alerts`. طلب الخدمة الموجّه في الدردشة (الحفظ كتنبيه `NEW_REQUEST`، بيانات واتساب، تعديل الميزانية، وحالة `DRAFT` المؤقتة): [طلبات الخدمة](docs/SERVICE-REQUESTS-AR.md). وكيل إدارة المشاريع (إنشاء المشروع، الخطة والمراحل، الاعتماد، نسبة الإنجاز، التنبيهات، الإغلاق): [وكيل إدارة المشاريع](docs/PROJECTS-AGENT-AR.md). يستخدم التطبيق Supabase Auth وData API عبر HTTPS مع RLS/RPC؛ لا يحتاج نشر الواجهة الجديدة إلى اتصال PostgreSQL مباشر.
 
 ## المسارات الرئيسية
 

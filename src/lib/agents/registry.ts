@@ -120,13 +120,31 @@ export const AGENT_DEFINITIONS: AgentDefinition[] = [
     nameAr: "وكيل إدارة المشاريع",
     nameEn: "Project manager",
     category: "delivery",
-    descriptionAr: "يبني خطة المشروع ومراحله، يتابع المهام والتأخير، ويحدّث نسبة الإنجاز التي يراها العميل.",
-    descriptionEn: "Builds the project plan and phases, tracks tasks and delays, and updates the progress the client sees.",
-    autonomiesAr: ["إنشاء مهام", "تحديث الحالة", "فتح تنبيه تأخير"],
-    autonomiesEn: ["Create tasks", "Update status", "Raise a delay alert"],
-    forbiddenAr: ["إغلاق مشروع غير مكتمل"],
-    forbiddenEn: ["Close an incomplete project"],
-    defaultRisk: "LOW",
+    descriptionAr:
+      "يقترح خطة المشروع ومراحلها ومهامها، يتابع التنفيذ والتأخير، ويحدّث نسبة الإنجاز التي يراها العميل — ولا يلتزم نيابة عن الوكالة.",
+    descriptionEn:
+      "Proposes the project plan, its phases and tasks, follows the execution and the delays, and updates the progress the client sees — it never commits on behalf of the agency.",
+    autonomiesAr: [
+      "اقتراح خطة المشروع كمسودة",
+      "تحديث حالة مهمة",
+      "فتح تنبيه تأخير داخل التطبيق",
+    ],
+    autonomiesEn: ["Propose a project plan as a draft", "Update a task status", "Raise an in-app delay alert"],
+    forbiddenAr: [
+      "اعتماد الخطة دون موافقة المالك",
+      "تغيير حالة حساسة للمشروع دون قرار المالك",
+      "إغلاق مشروع",
+      "إظهار ملاحظات أو تكاليف داخلية للعميل",
+      "إرسال بريد إلكتروني تلقائي",
+    ],
+    forbiddenEn: [
+      "Approve a plan without the owner",
+      "Change a sensitive project state without the owner's decision",
+      "Close a project",
+      "Show internal notes or costs to the client",
+      "Send an automatic email",
+    ],
+    defaultRisk: "MEDIUM",
   },
   {
     key: "content",
