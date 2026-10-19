@@ -6,8 +6,8 @@ import { normalizeAdminDashboard, type AdminDashboardData } from "@/lib/admin/pa
 import type { Locale } from "@/lib/domain/types";
 import { dictionaries } from "@/lib/i18n/dictionaries";
 
-/** Offer statuses that still need a response from the agency. */
-const NEW_OFFER_STATUSES = ["DRAFT", "SENT"];
+/** Offer statuses that still need a response from the agency (incl. accepted offers awaiting the owner's invoice decision). */
+const NEW_OFFER_STATUSES = ["DRAFT", "SENT", "APPROVED"];
 /** Project statuses that count as active. Must match the RPC's `activeProjects` count. */
 const ACTIVE_PROJECT_STATUSES = ["PLANNING", "IN_PROGRESS", "IN_REVIEW", "REVISIONS"];
 /** Alert categories the assistant raises for the team: human handoffs, understood briefs, guided service requests. */
@@ -32,6 +32,62 @@ export function AdminDashboard({ locale }: { locale: Locale }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<AdminTab>("overview");
+  const [offerBusy, setOfferBusy] = useState<string | null>(null);
+  const [offerNotice, setOfferNotice] = useState<Record<string, string>>({});
+  const [offerValidity, setOfferValidity] = useState<Record<string, string>>({});
+
+  /** Owner/partner draft edit (validity only here; line repricing is via the Offers API). */
+  async function saveOfferValidity(offerId: string) {
+    const days = Number(offerValidity[offerId]);
+    if (!Number.isFinite(days) || days <= 0) {
+      setOfferNotice((current) => ({ ...current, [offerId]: ar ? "أدخل عدد أيام صلاحية صحيحًا" : "Enter a valid number of days" }));
+      return;
+    }
+    setOfferBusy(offerId);
+    try {
+      const response = await fetch(`/api/offers/${encodeURIComponent(offerId)}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ validForDays: days }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Edit failed");
+      setOfferNotice((current) => ({ ...current, [offerId]: ar ? "تم حفظ تعديل المسودة" : "Draft edit saved" }));
+    } catch (reason) {
+      setOfferNotice((current) => ({ ...current, [offerId]: reason instanceof Error ? reason.message : String(reason) }));
+    } finally { setOfferBusy(null); }
+  }
+
+  /** Owner approval + send (DRAFT → SENT). The client's decision is separate. */
+  async function approveAndSend(offerId: string, code: string) {
+    setOfferBusy(offerId);
+    try {
+      const response = await fetch(`/api/offers/${encodeURIComponent(offerId)}/send`, { method: "POST" });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Send failed");
+      setData((current) => current ? {
+        ...current,
+        requests: current.requests.map((item) => item.id === offerId ? { ...item, status: payload.data.status } : item),
+      } : current);
+      setOfferNotice((current) => ({ ...current, [offerId]: ar ? `تم اعتماد العرض ${code} وإرساله للعميل` : `Offer ${code} approved and sent to the client` }));
+    } catch (reason) {
+      setOfferNotice((current) => ({ ...current, [offerId]: reason instanceof Error ? reason.message : String(reason) }));
+    } finally { setOfferBusy(null); }
+  }
+
+  /** Explicit owner decision: issue the invoice for a client-accepted offer. Never automatic. */
+  async function issueInvoice(offerId: string, code: string) {
+    setOfferBusy(offerId);
+    try {
+      const response = await fetch(`/api/offers/${encodeURIComponent(offerId)}/invoice`, { method: "POST" });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Invoice failed");
+      setOfferNotice((current) => ({ ...current, [offerId]: payload.data.created
+        ? (ar ? `تم إصدار فاتورة للعرض ${code} بقرارك الصريح` : `Invoice issued for offer ${code} by your explicit decision`)
+        : (ar ? `توجد فاتورة صادرة مسبقًا للعرض ${code}` : `An invoice already exists for offer ${code}`) }));
+    } catch (reason) {
+      setOfferNotice((current) => ({ ...current, [offerId]: reason instanceof Error ? reason.message : String(reason) }));
+    } finally { setOfferBusy(null); }
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -118,7 +174,17 @@ export function AdminDashboard({ locale }: { locale: Locale }) {
           {leadRequests.length === 0 && newOffers.length === 0 ? <EmptyAdmin text={ar ? "لا توجد طلبات جديدة: لا تنبيهات تواصل من المساعد ولا عروض بحالة مسودة أو مُرسلة." : "No new requests: no assistant handoff alerts and no offers in draft or sent status."} /> : (
             <div className="compact-list">
               {leadRequests.map((lead) => <a className="alert-row alert-row-link" href={`/admin/alerts/${encodeURIComponent(lead.id)}`} key={lead.id}><span className={`severity-dot severity-${lead.severity.toLowerCase()}`} /><div className="compact-row-copy"><strong>{lead.customerName || (ar ? lead.titleAr : lead.titleEn)}</strong><span>{ar ? lead.bodyAr : lead.bodyEn}</span><span className="alert-meta">{alertCategoryLabel(lead.category, locale)}{lead.customerEmail ? ` · ${lead.customerEmail}` : ""} · {formatDate(lead.createdAt, locale)}</span></div><div className="compact-row-side"><span className="status-pill status-new">{ar ? "بانتظار الفريق" : "Awaiting team"}</span><time>{lead.conversationId ? `#${lead.conversationId.slice(0, 8)}` : ""}</time></div><span className="alert-row-open" aria-hidden="true">←</span></a>)}
-              {newOffers.map((item) => <article className="compact-row" key={item.id}><div className="compact-row-copy"><strong>{item.code} · {item.customerName}</strong><span>{item.createdByAgent ? `${ar ? "أنشأه وكيل" : "Created by agent"}: ${item.createdByAgent}` : item.customerEmail || item.status}</span></div><div className="compact-row-side"><strong>{formatMoney(item.totalMinor, item.currency, locale)}</strong><StatusLabel status={item.status} locale={locale} /></div></article>)}
+              {newOffers.map((item) => <article className="compact-row" key={item.id}><div className="compact-row-copy"><strong>{item.code} · {item.customerName}</strong><span>{item.createdByAgent ? `${ar ? "أنشأه وكيل" : "Created by agent"}: ${item.createdByAgent}` : item.customerEmail || item.status}</span>
+                {item.status === "DRAFT" && <span className="offer-admin-actions">
+                  <input type="number" min="1" max="365" placeholder={ar ? "أيام الصلاحية" : "Validity days"} value={offerValidity[item.id] ?? ""} onChange={(event) => setOfferValidity((current) => ({ ...current, [item.id]: event.target.value }))} />
+                  <button type="button" disabled={offerBusy === item.id} onClick={() => void saveOfferValidity(item.id)}>{ar ? "حفظ التعديل" : "Save edit"}</button>
+                  <button type="button" disabled={offerBusy === item.id} onClick={() => void approveAndSend(item.id, item.code)}>{ar ? "اعتماد وإرسال للعميل" : "Approve & send to client"}</button>
+                </span>}
+                {item.status === "APPROVED" && <span className="offer-admin-actions">
+                  <button type="button" disabled={offerBusy === item.id} onClick={() => void issueInvoice(item.id, item.code)}>{ar ? "إصدار الفاتورة (قرار صريح)" : "Issue invoice (explicit)"}</button>
+                </span>}
+                {offerNotice[item.id] && <span role="status">{offerNotice[item.id]}</span>}
+              </div><div className="compact-row-side"><strong>{formatMoney(item.totalMinor, item.currency, locale)}</strong><StatusLabel status={item.status} locale={locale} /></div></article>)}
             </div>
           )}
         </section>}

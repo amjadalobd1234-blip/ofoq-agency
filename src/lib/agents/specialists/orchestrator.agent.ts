@@ -221,13 +221,10 @@ async function fulfilRequest(input: {
     locale === "ar"
       ? `رقم العرض: ${proposal.offer.code} • مدة التنفيذ المتوقعة: ${delivery.taskCount > 0 ? pricing.quote.deliveryDays : pricing.quote.deliveryDays} يوم`
       : `Offer reference: ${proposal.offer.code} • Expected delivery: ${pricing.quote.deliveryDays} days`,
-    pricing.autoApproved
-      ? locale === "ar"
-        ? "يمكنك الموافقة على العرض من صفحة «العروض»، وبعد الدفع نبدأ التنفيذ."
-        : "You can approve it from the Offers page; once payment is recorded we start delivery."
-      : locale === "ar"
-        ? "العرض يحتاج مراجعة سريعة من فريقنا قبل أن يصبح جاهزًا للموافقة، وسنبلغك فورًا."
-        : "Our team needs a quick review before this offer becomes approvable — we'll let you know right away.",
+    // Draft only: the owner/partner must approve before this offer is sent.
+    locale === "ar"
+      ? "العرض الآن مسودة تحتاج مراجعة وموافقة المالك قبل إرسالها إليك رسميًا، وسنبلغك فورًا."
+      : "This offer is a draft that needs owner review and approval before it is formally sent to you — we'll let you know right away.",
     pricing.escalations.length > 0 ? t("escalation", locale) : "",
     t("privacyNote", locale),
   ]
