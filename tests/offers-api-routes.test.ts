@@ -30,6 +30,7 @@ const { POST: createOffer } = await import("../src/app/api/offers/route");
 const { PATCH: patchOffer } = await import("../src/app/api/offers/[id]/route");
 const { POST: sendOfferRoute } = await import("../src/app/api/offers/[id]/send/route");
 const { POST: decideRoute } = await import("../src/app/api/offers/[id]/decision/route");
+const { POST: invoiceRoute } = await import("../src/app/api/offers/[id]/invoice/route");
 const { createCustomer } = await import("../src/lib/repositories/customers.repo");
 const { createUser } = await import("../src/lib/repositories/identity.repo");
 
@@ -88,13 +89,27 @@ describe("offers API routes", () => {
     expect((await sendOfferRoute(req(ownerId), ctx(offerId))).status).toBe(412);
     expect((await patchOffer(req(ownerId, { validForDays: 5 }, "PATCH"), ctx(offerId))).status).toBe(412);
 
-    // 4) Only the owning client decides; acceptance issues an invoice.
+    // 4) Only the owning client decides; acceptance issues NO invoice/email.
     expect((await decideRoute(req(otherId, { decision: "accept" }), ctx(offerId))).status).toBe(403);
     expect((await decideRoute(req(ownerId, { decision: "accept" }), ctx(offerId))).status).toBe(412);
+    // Owner invoicing is impossible before acceptance.
+    expect((await invoiceRoute(req(ownerId), ctx(offerId))).status).toBe(412);
     const accepted = await decideRoute(req(clientId, { decision: "accept" }), ctx(offerId));
     expect(accepted.status).toBe(200);
-    const acceptedBody = await accepted.json() as { data: { status: string; invoiceId: string | null } };
+    const acceptedBody = await accepted.json() as { data: { status: string; invoiceId: string | null; alertId: string | null } };
     expect(acceptedBody.data.status).toBe("APPROVED");
-    expect(acceptedBody.data.invoiceId).toBeTruthy();
+    expect(acceptedBody.data.invoiceId).toBeNull();
+    expect(acceptedBody.data.alertId).toBeTruthy();
+
+    // 5) Invoicing is the owner's separate explicit action (idempotent).
+    expect((await invoiceRoute(req(clientId), ctx(offerId))).status).toBe(403);
+    const issued = await invoiceRoute(req(ownerId), ctx(offerId));
+    expect(issued.status).toBe(201);
+    const issuedBody = await issued.json() as { data: { invoiceId: string; created: boolean } };
+    expect(issuedBody.data.created).toBe(true);
+    const reissued = await invoiceRoute(req(ownerId), ctx(offerId));
+    expect(reissued.status).toBe(200);
+    expect(((await reissued.json()) as { data: { invoiceId: string; created: boolean } }).data)
+      .toMatchObject({ invoiceId: issuedBody.data.invoiceId, created: false });
   });
 });

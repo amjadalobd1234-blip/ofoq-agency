@@ -16,11 +16,11 @@ const decisionSchema = z.object({
  * POST /api/offers/[id]/decision — the CLIENT's final decision on a SENT offer.
  *
  * Distinct from owner approval (`/send`): only the owning client may call
- * this, only on a sent, unexpired offer. `accept` marks the offer APPROVED
- * and issues an invoice through the existing billing service (which also
- * notifies the client by email through the configured mail provider — in
- * unconfigured environments that is a console log, never a real send). No
- * payment is taken or charged here. `reject` marks it REJECTED.
+ * this, only on a sent, unexpired offer. `accept` only marks the offer
+ * APPROVED and raises an internal (in-app, no-email) alert for the owner —
+ * it never issues an invoice and never sends email. Invoicing is the
+ * owner's separate explicit action (`POST /api/offers/[id]/invoice`).
+ * `reject` marks it REJECTED.
  */
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -33,7 +33,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (parsed.data.decision === "accept") {
       const decision = await approveOffer(id, resolved.actor);
       return Response.json(
-        { data: { id: decision.offer.id, code: decision.offer.code, status: decision.offer.status, invoiceId: decision.invoiceId } },
+        { data: { id: decision.offer.id, code: decision.offer.code, status: decision.offer.status, invoiceId: decision.invoiceId, alertId: decision.alertId } },
         { headers: { "Cache-Control": "no-store" } },
       );
     }

@@ -6,8 +6,8 @@ import { normalizeAdminDashboard, type AdminDashboardData } from "@/lib/admin/pa
 import type { Locale } from "@/lib/domain/types";
 import { dictionaries } from "@/lib/i18n/dictionaries";
 
-/** Offer statuses that still need a response from the agency. */
-const NEW_OFFER_STATUSES = ["DRAFT", "SENT"];
+/** Offer statuses that still need a response from the agency (incl. accepted offers awaiting the owner's invoice decision). */
+const NEW_OFFER_STATUSES = ["DRAFT", "SENT", "APPROVED"];
 /** Project statuses that count as active. Must match the RPC's `activeProjects` count. */
 const ACTIVE_PROJECT_STATUSES = ["PLANNING", "IN_PROGRESS", "IN_REVIEW", "REVISIONS"];
 /** Alert categories the assistant raises for the team: human handoffs, understood briefs, guided service requests. */
@@ -69,6 +69,21 @@ export function AdminDashboard({ locale }: { locale: Locale }) {
         requests: current.requests.map((item) => item.id === offerId ? { ...item, status: payload.data.status } : item),
       } : current);
       setOfferNotice((current) => ({ ...current, [offerId]: ar ? `تم اعتماد العرض ${code} وإرساله للعميل` : `Offer ${code} approved and sent to the client` }));
+    } catch (reason) {
+      setOfferNotice((current) => ({ ...current, [offerId]: reason instanceof Error ? reason.message : String(reason) }));
+    } finally { setOfferBusy(null); }
+  }
+
+  /** Explicit owner decision: issue the invoice for a client-accepted offer. Never automatic. */
+  async function issueInvoice(offerId: string, code: string) {
+    setOfferBusy(offerId);
+    try {
+      const response = await fetch(`/api/offers/${encodeURIComponent(offerId)}/invoice`, { method: "POST" });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Invoice failed");
+      setOfferNotice((current) => ({ ...current, [offerId]: payload.data.created
+        ? (ar ? `تم إصدار فاتورة للعرض ${code} بقرارك الصريح` : `Invoice issued for offer ${code} by your explicit decision`)
+        : (ar ? `توجد فاتورة صادرة مسبقًا للعرض ${code}` : `An invoice already exists for offer ${code}`) }));
     } catch (reason) {
       setOfferNotice((current) => ({ ...current, [offerId]: reason instanceof Error ? reason.message : String(reason) }));
     } finally { setOfferBusy(null); }
@@ -164,6 +179,9 @@ export function AdminDashboard({ locale }: { locale: Locale }) {
                   <input type="number" min="1" max="365" placeholder={ar ? "أيام الصلاحية" : "Validity days"} value={offerValidity[item.id] ?? ""} onChange={(event) => setOfferValidity((current) => ({ ...current, [item.id]: event.target.value }))} />
                   <button type="button" disabled={offerBusy === item.id} onClick={() => void saveOfferValidity(item.id)}>{ar ? "حفظ التعديل" : "Save edit"}</button>
                   <button type="button" disabled={offerBusy === item.id} onClick={() => void approveAndSend(item.id, item.code)}>{ar ? "اعتماد وإرسال للعميل" : "Approve & send to client"}</button>
+                </span>}
+                {item.status === "APPROVED" && <span className="offer-admin-actions">
+                  <button type="button" disabled={offerBusy === item.id} onClick={() => void issueInvoice(item.id, item.code)}>{ar ? "إصدار الفاتورة (قرار صريح)" : "Issue invoice (explicit)"}</button>
                 </span>}
                 {offerNotice[item.id] && <span role="status">{offerNotice[item.id]}</span>}
               </div><div className="compact-row-side"><strong>{formatMoney(item.totalMinor, item.currency, locale)}</strong><StatusLabel status={item.status} locale={locale} /></div></article>)}

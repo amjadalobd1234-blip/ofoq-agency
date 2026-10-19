@@ -93,7 +93,7 @@ export function ClientDashboard({ locale }: { locale: Locale }) {
         offers: current.offers.map((item) => item.id === offer.id ? { ...item, status: payload.data.status } : item),
       } : current);
       setOfferNotice(decision === "accept"
-        ? (ar ? `تم قبول العرض ${offer.code}. ستصدر فاتورة، ولا يتم أي دفع تلقائي.` : `Offer ${offer.code} accepted. An invoice will be issued; no automatic payment is taken.`)
+        ? (ar ? `تم قبول العرض ${offer.code}. تم إشعار المالك بقبولك، وإصدار الفاتورة قرار لاحق من المالك — لا فاتورة ولا دفع تلقائي الآن.` : `Offer ${offer.code} accepted. The owner has been notified; issuing any invoice is a separate owner decision — no invoice or payment now.`)
         : (ar ? `تم رفض العرض ${offer.code}.` : `Offer ${offer.code} rejected.`));
     } catch (reason) {
       setOfferNotice(reason instanceof Error ? reason.message : String(reason));

@@ -267,13 +267,19 @@ export async function updateDraftOffer(
 export interface OfferDecision {
   offer: OfferWithItems;
   projectId: string | null;
-  invoiceId: string | null;
+  /** Always null: acceptance never issues an invoice (separate owner action). */
+  invoiceId: null;
+  /** Internal owner alert raised by the acceptance, when it was created. */
+  alertId: string | null;
 }
 
 /**
- * Client approves an offer: the project moves to "awaiting payment" and an
- * invoice is issued. Nothing is charged automatically — payment happens through
- * the configured provider or a manually recorded transfer.
+ * Client accepts an offer (final client decision).
+ *
+ * This ONLY: marks the offer APPROVED and raises an internal alert for the
+ * owner. It never issues an invoice and never sends email — invoicing is a
+ * separate, explicit owner decision (`issueInvoiceForApprovedOffer`), and
+ * payment remains manual. Project status is untouched until then.
  */
 export async function approveOffer(
   offerId: string,
@@ -287,7 +293,7 @@ export async function approveOffer(
   if (actor.role !== "CLIENT") throw new PreconditionError("Only the client can accept an offer");
   assertCustomerAccess(actor, offer.customer_id);
   if (offer.status === "APPROVED") {
-    return { offer, projectId: offer.project_id, invoiceId: null };
+    return { offer, projectId: offer.project_id, invoiceId: null, alertId: null };
   }
   if (offer.status !== "SENT") {
     throw new PreconditionError("Only a sent offer can be approved");
@@ -297,38 +303,91 @@ export async function approveOffer(
     throw new PreconditionError("This offer has expired");
   }
   assertPriced(offer);
-  const actorUserId = actor.id;
+  void options;
+
+  await updateOffer(offerId, { status: "APPROVED", approved_at: nowIso() });
+
+  // Internal owner alert — in-app only. `notify: false` guarantees this
+  // acceptance path sends no email to staff either.
+  const { raiseAlert } = await import("./alerts.service");
+  const alert = await raiseAlert({
+    severity: "INFO",
+    category: "OFFER_ACCEPTED",
+    title_ar: `قبل العميل العرض ${offer.code}`,
+    title_en: `Client accepted offer ${offer.code}`,
+    body_ar: `قبل العميل العرض ${offer.code}. لم تُصدر أي فاتورة تلقائيًا — إصدار الفاتورة قرار صريح من المالك.`,
+    body_en: `The client accepted offer ${offer.code}. No invoice was issued automatically — issuing the invoice is an explicit owner decision.`,
+    entity_type: "offer",
+    entity_id: offerId,
+    customer_id: offer.customer_id,
+    target_role: "OWNER",
+    dedupe_key: `offer-accepted:${offerId}`,
+    notify: false,
+    meta: { offerCode: offer.code, totalMinor: offer.total_minor, currency: offer.currency },
+  });
+
+  await logActivity({
+    actor_type: "USER",
+    actor_user_id: actor.id,
+    action: "offer.approved",
+    entity_type: "offer",
+    entity_id: offerId,
+    customer_id: offer.customer_id,
+    summary: `Client approved offer ${offer.code} (no invoice issued)`,
+    meta: { alertId: alert.id, invoiceIssued: false },
+  });
+
+  const updated = await findOfferById(offerId);
+  return { offer: updated!, projectId: offer.project_id, invoiceId: null, alertId: alert.id };
+}
+
+/**
+ * Explicit owner/partner decision: issue the invoice for an APPROVED offer.
+ *
+ * This is the ONLY path from an accepted offer to an invoice, and it is
+ * idempotent (a second call returns the existing invoice). It runs the
+ * existing billing service, whose invoice-notification email is part of
+ * issuing an invoice — the client-acceptance path above sends nothing.
+ */
+export async function issueInvoiceForApprovedOffer(
+  offerId: string,
+  actor: Actor,
+): Promise<{ offer: OfferWithItems; invoiceId: string; created: boolean }> {
+  requireCapability(actor, "invoices.manage");
+  const offer = await findOfferById(offerId);
+  if (!offer) throw new NotFoundError("Offer not found");
+  if (offer.status !== "APPROVED") {
+    throw new PreconditionError("Invoices can only be issued for an offer the client has accepted (APPROVED)");
+  }
+  assertPriced(offer);
+
+  const { listInvoices } = await import("@/lib/repositories/billing.repo");
+  const existing = await listInvoices({ customerId: offer.customer_id, limit: 200 });
+  const alreadyIssued = existing.rows.find((invoice) => invoice.offer_id === offerId);
+  if (alreadyIssued) return { offer, invoiceId: alreadyIssued.id, created: false };
+
+  const { createInvoiceFromOffer } = await import("./billing.service");
+  const { updateProject } = await import("@/lib/repositories/projects.repo");
   const pricedOffer: typeof offer & { total_minor: number; subtotal_minor: number } = {
     ...offer,
     total_minor: offer.total_minor as number,
     subtotal_minor: offer.subtotal_minor as number,
   };
-
-  await updateOffer(offerId, { status: "APPROVED", approved_at: nowIso() });
-
-  const { createInvoiceFromOffer } = await import("./billing.service");
-  const { updateProject } = await import("@/lib/repositories/projects.repo");
-
-  const projectId = options.projectId ?? offer.project_id ?? null;
-  if (projectId) {
-    await updateProject(projectId, { status: "AWAITING_PAYMENT" });
+  const invoice = await createInvoiceFromOffer(pricedOffer, { actorUserId: actor.id });
+  if (offer.project_id) {
+    await updateProject(offer.project_id, { status: "AWAITING_PAYMENT" });
   }
-
-  const invoice = await createInvoiceFromOffer(pricedOffer, { actorUserId });
-
   await logActivity({
     actor_type: "USER",
-    actor_user_id: actorUserId,
-    action: "offer.approved",
+    actor_user_id: actor.id,
+    action: "offer.invoice_issued_by_owner",
     entity_type: "offer",
     entity_id: offerId,
     customer_id: offer.customer_id,
-    summary: `Client approved offer ${offer.code}`,
-    meta: { invoiceId: invoice.id, projectId },
+    summary: `Owner issued invoice for accepted offer ${offer.code}`,
+    meta: { invoiceId: invoice.id },
   });
-
-  const updated = await findOfferById(offerId);
-  return { offer: updated!, projectId, invoiceId: invoice.id };
+  return { offer: (await findOfferById(offerId))!, invoiceId: invoice.id, created: true };
 }
 
 export async function rejectOffer(

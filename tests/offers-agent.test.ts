@@ -7,10 +7,12 @@ import type { Actor } from "../src/lib/auth/permissions";
 import { createCustomer } from "../src/lib/repositories/customers.repo";
 import { createUser } from "../src/lib/repositories/identity.repo";
 import { updateOffer } from "../src/lib/repositories/offers.repo";
+import { getDb } from "../src/lib/db";
 import {
   approveAndSendOffer,
   approveOffer,
   getOfferForActor,
+  issueInvoiceForApprovedOffer,
   rejectOffer,
   updateDraftOffer,
 } from "../src/lib/services/offers.service";
@@ -114,15 +116,39 @@ describe("offers agent", () => {
     await expect(updateDraftOffer(offer.id, owner, { clientNote: "late" })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
   });
 
-  it("only the owning client can accept a sent offer; acceptance issues an invoice", async () => {
+  it("acceptance only approves + alerts the owner: no invoice, no email; invoicing is a separate owner action", async () => {
     const { offer } = await draft();
     await approveAndSendOffer(offer.id, owner);
     await expect(approveOffer(offer.id, otherClient)).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(approveOffer(offer.id, owner)).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
 
+    // Invoicing before acceptance is impossible too.
+    await expect(issueInvoiceForApprovedOffer(offer.id, owner)).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+
     const decision = await approveOffer(offer.id, client);
     expect(decision.offer.status).toBe("APPROVED");
-    expect(decision.invoiceId).toBeTruthy();
+    expect(decision.invoiceId).toBeNull();
+
+    const db = await getDb();
+    // Internal owner alert exists, targeted at the owner.
+    const alert = await db.get<{ category: string; target_role: string; entity_id: string }>(
+      "SELECT category, target_role, entity_id FROM alerts WHERE id = ?", [decision.alertId],
+    );
+    expect(alert).toMatchObject({ category: "OFFER_ACCEPTED", target_role: "OWNER", entity_id: offer.id });
+    // No invoice was created for this offer, and repeat acceptance stays alert/invoice-free.
+    const invoices = await db.query<{ id: string }>("SELECT id FROM invoices WHERE offer_id = ?", [offer.id]);
+    expect(invoices).toHaveLength(0);
+    const again = await approveOffer(offer.id, client);
+    expect(again.invoiceId).toBeNull();
+    expect(again.alertId).toBeNull();
+
+    // The owner now issues the invoice explicitly; a second call reuses it.
+    await expect(issueInvoiceForApprovedOffer(offer.id, client)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const issued = await issueInvoiceForApprovedOffer(offer.id, owner);
+    expect(issued.created).toBe(true);
+    expect(issued.invoiceId).toBeTruthy();
+    const reissued = await issueInvoiceForApprovedOffer(offer.id, owner);
+    expect(reissued).toMatchObject({ invoiceId: issued.invoiceId, created: false });
   });
 
   it("only the owning client can reject a sent offer, once", async () => {
