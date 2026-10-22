@@ -65,9 +65,13 @@ export function renderPostgresMigrations(rootDir = process.cwd()): GeneratedMigr
     (table) => `ALTER TABLE public.${table} ENABLE ROW LEVEL SECURITY;`,
   );
   const rlsSql = `${GENERATED_HEADER}\n-- Defense in depth for Supabase's exposed public schema.\n-- No client-facing policies are created; use the server-only DATABASE_URL.\n\n${formatStatements(rlsStatements)}`;
-  generated.push(makeMigration("0003", "enable rls", "0003_enable_rls.sql", rlsSql));
+  // RLS is enabled on every table, so it must run AFTER the table migrations:
+  // `ALTER TABLE … ENABLE ROW LEVEL SECURITY` fails when the table is missing.
+  // The migration therefore takes the next free id instead of a fixed one.
+  const rlsId = String(Math.max(...generated.map((migration) => Number(migration.id))) + 1).padStart(4, "0");
+  generated.push(makeMigration(rlsId, "enable rls", `${rlsId}_enable_rls.sql`, rlsSql));
 
-  let nextDialectMigrationId = Math.max(...generated.map((migration) => Number(migration.id))) + 1;
+  let nextDialectMigrationId = Number(rlsId) + 1;
   for (const source of allSources.filter((candidate) => candidate.sql.includes("-- @postgres-skip:"))) {
     const equivalentStatements = [...source.sql.matchAll(/^-- @postgres-equivalent:\s*(.+)$/gm)].map((match) => match[1]!.trim());
     if (equivalentStatements.length === 0) continue;
@@ -169,9 +173,31 @@ export function generatePostgresMigrations(rootDir = process.cwd()): GeneratedMi
   for (const migration of migrations) {
     fs.writeFileSync(path.join(outputDir, migration.filename), migration.sql, "utf8");
   }
+  removeSupersededMigrations(outputDir, migrations);
   fs.writeFileSync(setupPath, renderSupabaseSetupSql(migrations, rootDir), "utf8");
 
   return migrations;
+}
+
+/**
+ * Deletes the generated files that the current source no longer produces.
+ *
+ * The PostgreSQL directory holds generated files only, so a file that is not
+ * part of the new set is a leftover of an earlier generation (a renamed or
+ * renumbered migration). Leaving it on disk would apply a stale migration —
+ * for example the old `0003_enable_rls.sql` that enables RLS before the tables
+ * exist. Only files carrying the generated header are removed.
+ */
+function removeSupersededMigrations(outputDir: string, migrations: GeneratedMigration[]): void {
+  const keep = new Set(migrations.map((migration) => migration.filename));
+  if (!fs.existsSync(outputDir)) return;
+  for (const file of fs.readdirSync(outputDir)) {
+    if (!file.endsWith(".sql") || keep.has(file)) continue;
+    const fullPath = path.join(outputDir, file);
+    const content = fs.readFileSync(fullPath, "utf8");
+    if (!content.startsWith("-- GENERATED FILE")) continue;
+    fs.rmSync(fullPath);
+  }
 }
 
 function makeMigration(id: string, name: string, filename: string, sql: string): GeneratedMigration {
@@ -265,6 +291,8 @@ function makeIdempotentForSetup(statement: string): string {
   sql = sql.replace(/^CREATE\s+INDEX\s+/i, "CREATE INDEX IF NOT EXISTS ");
   sql = sql.replace(/^CREATE\s+UNIQUE\s+INDEX\s+/i, "CREATE UNIQUE INDEX IF NOT EXISTS ");
   sql = sql.replace(/^ALTER\s+TABLE\s+(?!public\.)/i, "ALTER TABLE public.");
+  // Re-running the setup script must not fail on a column that already exists.
+  sql = sql.replace(/\bADD\s+COLUMN\s+(?!IF\s+NOT\s+EXISTS)/gi, "ADD COLUMN IF NOT EXISTS ");
   return `${sql.replace(/;+$/, "")};`;
 }
 

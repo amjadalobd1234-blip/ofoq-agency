@@ -6,10 +6,10 @@ import { normalizeAdminDashboard, type AdminDashboardData } from "@/lib/admin/pa
 import type { Locale } from "@/lib/domain/types";
 import { dictionaries } from "@/lib/i18n/dictionaries";
 
+import { AdminProjects } from "./admin-projects";
+
 /** Offer statuses that still need a response from the agency (incl. accepted offers awaiting the owner's invoice decision). */
 const NEW_OFFER_STATUSES = ["DRAFT", "SENT", "APPROVED"];
-/** Project statuses that count as active. Must match the RPC's `activeProjects` count. */
-const ACTIVE_PROJECT_STATUSES = ["PLANNING", "IN_PROGRESS", "IN_REVIEW", "REVISIONS"];
 /** Alert categories the assistant raises for the team: human handoffs, understood briefs, guided service requests. */
 const LEAD_CATEGORIES = ["NEW_LEAD", "HUMAN_REQUEST", "NEW_REQUEST"];
 type AdminTab = "overview" | "clients" | "requests" | "projects" | "campaigns" | "reports" | "alerts" | "agents";
@@ -119,7 +119,6 @@ export function AdminDashboard({ locale }: { locale: Locale }) {
   if (!data) return null;
 
   const newOffers = data.requests.filter((item) => NEW_OFFER_STATUSES.includes(item.status));
-  const activeProjects = data.projects.filter((project) => ACTIVE_PROJECT_STATUSES.includes(project.status));
   const pendingActions = data.agentActions.filter((action) => Number(action.requiresApproval) === 1);
   // Client escalations the assistant raised: a person was requested, or the
   // client's need is understood. The fallback filter keeps the section working
@@ -190,8 +189,8 @@ export function AdminDashboard({ locale }: { locale: Locale }) {
         </section>}
 
         {(activeTab === "overview" || activeTab === "projects") && <section className="platform-card content-card" id="projects">
-          <div className="card-heading-row"><div><span className="eyebrow">03 / {ar ? "المشاريع" : "Projects"}</span><h2>{ar ? "المشاريع النشطة" : "Active projects"}</h2></div><span className="mini-count">{data.totals.activeProjects}</span></div>
-          {activeProjects.length === 0 ? <EmptyAdmin text={ar ? "لا توجد مشاريع نشطة حاليًا." : "There are no active projects right now."} /> : <div className="compact-list">{activeProjects.map((project) => <article className="compact-row" key={project.id}><div className="compact-row-copy"><strong>{project.code} · {project.title}</strong><span>{project.customerName}{project.dueDate ? ` · ${ar ? "الاستحقاق" : "Due"} ${formatDate(project.dueDate, locale)}` : ""}</span><div className="progress-track" aria-hidden="true"><span style={{ width: `${clampPercent(project.progress)}%` }} /></div></div><div className="compact-row-side"><strong>{clampPercent(project.progress)}%</strong><StatusLabel status={project.status} locale={locale} /></div></article>)}</div>}
+          <div className="card-heading-row"><div><span className="eyebrow">03 / {ar ? "المشاريع" : "Projects"}</span><h2>{ar ? "إدارة المشاريع" : "Project management"}</h2><p className="card-subtitle">{ar ? "إنشاء المشروع، إعداد الخطة، اعتماد المالك، متابعة المهام، وإغلاق المشروع." : "Create the project, prepare the plan, the owner's approval, follow the tasks and close the project."}</p></div><span className="mini-count">{data.totals.activeProjects}</span></div>
+          <AdminProjects locale={locale} clients={data.clients} offers={data.requests} />
         </section>}
 
         {(activeTab === "overview" || activeTab === "campaigns") && <section className="platform-card content-card" id="campaigns">
@@ -267,10 +266,6 @@ function StatusLabel({ status, locale }: { status: string; locale: Locale }) {
 }
 function IntegrationCard({ label, status, detail, locale }: { label: string; status: string; detail: string; locale: Locale }) {
   return <article className="platform-card integration-card"><div className="integration-card-head"><span className="integration-mark">↗</span><span className="integration-status">{status}</span></div><h3>{label}</h3><p>{detail}</p></article>;
-}
-function clampPercent(value: number | null | undefined): number {
-  const n = Number(value ?? 0);
-  return Number.isFinite(n) ? Math.min(100, Math.max(0, Math.round(n))) : 0;
 }
 function formatBuckets(items: Array<{ currency: string; totalMinor: number | string }>, locale: Locale): string {
   if (!items.length) return "—";

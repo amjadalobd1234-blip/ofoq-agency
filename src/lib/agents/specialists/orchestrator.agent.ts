@@ -8,7 +8,7 @@ import { runAgent } from "../runtime";
 import { buildSummary, extractRequirements, loadProfile, nextQuestion, type RequirementProfile } from "./needs.agent";
 import { priceRequirements, type PricingOutcome } from "./pricing.agent";
 import { buildProposal } from "./proposal.agent";
-import { createDeliveryPlan } from "./delivery.agent";
+import { proposeDeliveryPlan } from "./delivery.agent";
 import { answerSupportQuestion, classifyIntent, loadSupportContext, type SupportAnswer } from "./support.agent";
 
 /**
@@ -198,7 +198,9 @@ async function fulfilRequest(input: {
     send: pricing.autoApproved,
   });
 
-  const delivery = await createDeliveryPlan({
+  // The delivery agent only *proposes* a plan: it stays a draft until the
+  // owner approves it, and the project keeps its current status.
+  const delivery = await proposeDeliveryPlan({
     project: proposal.project,
     customer,
     services: pricing.services,

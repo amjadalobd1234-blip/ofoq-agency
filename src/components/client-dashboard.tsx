@@ -10,6 +10,21 @@ interface Project {
   status: string; progress: number; currency: string; amountTotalMinor: number | string;
   startDate?: string | null; dueDate?: string | null;
   tasks?: Array<{ id: string; title: string; titleEn?: string | null; status: string; dueDate?: string | null }>;
+  /**
+   * The approved plan, as the client dashboard RPC returns it.
+   *
+   * In production the portal reads Supabase directly, so this is where the
+   * plan comes from — no DATABASE_URL and no local database involved.
+   */
+  plan?: ClientPlan | null;
+}
+/** The client-safe plan: phases and their client-visible tasks. */
+interface ClientPlan {
+  version: number;
+  status: string;
+  approvedAt?: string | null;
+  summary?: string | null;
+  phases: { key: string; title: string; dueDate?: string | null; tasks: { title: string; status: string; dueDate?: string | null }[] }[];
 }
 interface Offer {
   id: string; code: string; status: string; currency: string; totalMinor: number | string | null;
@@ -47,6 +62,20 @@ interface PortalData {
   files: Array<{ id: string; name: string; kind?: string | null; sizeBytes: number | string; createdAt: string }>;
 }
 
+/** The client-safe project list served by GET /api/projects. */
+interface ClientProject {
+  id: string; code: string; title: string; titleEn?: string | null; status: string; progress: number;
+  dueDate?: string | null; daysRemaining?: number | null;
+  plan?: { version: number; status: string; approvedAt?: string | null } | null;
+  tasks: { total: number; done: number; open: number };
+}
+/** The client-safe detail served by GET /api/projects/[id]. */
+interface ClientProjectDetail {
+  project: { id: string; code: string; title: string; status: string; progress: number; dueDate: string | null; daysRemaining?: number | null };
+  plan: ClientPlan | null;
+  tasks: { id: string; title: string; status: string; dueDate: string | null }[];
+}
+
 export function ClientDashboard({ locale }: { locale: Locale }) {
   const ar = locale === "ar";
   const copy = dictionaries[locale];
@@ -57,6 +86,71 @@ export function ClientDashboard({ locale }: { locale: Locale }) {
   const [offerService, setOfferService] = useState(FORMAL_OFFER_SERVICES[0]!.slug);
   const [offerBusy, setOfferBusy] = useState<string | null>(null);
   const [offerNotice, setOfferNotice] = useState("");
+  // The Projects Agent: the progress and the plan the client is allowed to see.
+  const [trackedProjects, setTrackedProjects] = useState<ClientProject[] | null>(null);
+  const [projectDetails, setProjectDetails] = useState<Record<string, ClientProjectDetail>>({});
+  const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
+  const [projectBusy, setProjectBusy] = useState<string | null>(null);
+
+  /** Loads the client-safe project list (progress + plan state). */
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/projects", { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const payload = await response.json().catch(() => ({}));
+        const rows = (payload.data?.rows ?? []) as ClientProject[];
+        setTrackedProjects(rows);
+      })
+      .catch(() => {
+        // The portal still shows the projects of the dashboard payload; the
+        // Projects API is an addition, never a requirement to read the portal.
+      })
+      .finally(() => { if (!controller.signal.aborted) setProjectBusy(null); });
+    return () => controller.abort();
+  }, []);
+
+  /**
+   * Shows (or hides) the plan of one project.
+   *
+   * The plan itself comes from the dashboard payload when the deployment
+   * answers through Supabase (production) — the local Projects API is only
+   * called when the payload carries no phase yet (local development).
+   */
+  function toggleProjectPlan(project: Project) {
+    const expanded = expandedProjects[project.id] ?? Boolean(projectDetails[project.id]);
+    if (expanded) {
+      setExpandedProjects((current) => ({ ...current, [project.id]: false }));
+      return;
+    }
+    setExpandedProjects((current) => ({ ...current, [project.id]: true }));
+    if (projectDetails[project.id]) return;
+    if ((project.plan?.phases?.length ?? 0) > 0) return;
+    void openProjectPlan(project.id);
+  }
+
+  /** Opens the plan of one project: the phases and the tasks the client sees. */
+  async function openProjectPlan(projectId: string) {
+    if (projectDetails[projectId]) {
+      setProjectDetails((current) => {
+        const next = { ...current };
+        delete next[projectId];
+        return next;
+      });
+      return;
+    }
+    setProjectBusy(projectId);
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}`, { cache: "no-store" });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Unable to load the project plan.");
+      setProjectDetails((current) => ({ ...current, [projectId]: payload.data as ClientProjectDetail }));
+    } catch (reason) {
+      setOfferNotice(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setProjectBusy(null);
+    }
+  }
 
   /** Asks for a formal offer: creates a DRAFT for owner approval — never sent to the client as-is. */
   async function requestFormalOffer() {
@@ -161,17 +255,58 @@ export function ClientDashboard({ locale }: { locale: Locale }) {
           <div className="card-heading-row"><div><span className="eyebrow">01 / {portal.overview}</span><h2 id="projects-heading">{portal.projects}</h2></div><a className="subtle-link" href="/chat">{ar ? "اسأل مساعد أفق" : "Ask Ofoq"} ↗</a></div>
           {data.projects.length === 0 ? <EmptyState text={portal.noProjects} action={ar ? "ابدأ محادثة" : "Start a conversation"} href="/chat" /> : (
             <div className="project-list">
-              {data.projects.map((project) => (
+              {data.projects.map((project) => {
+                const tracked = trackedProjects?.find((entry) => entry.id === project.id) ?? null;
+                const detail = projectDetails[project.id] ?? null;
+                const plan = detail?.plan ?? project.plan ?? null;
+                const expanded = expandedProjects[project.id] ?? Boolean(detail);
+                const progress = Math.min(100, Math.max(0, Number(tracked?.progress ?? project.progress) || 0));
+                return (
                 <article className="project-row" key={project.id}>
                   <div className="project-row-main">
                     <div className="project-row-title"><div><h3>{ar ? project.title : project.titleEn || project.title}</h3><span className="project-code">{project.code}</span></div><StatusPill status={project.status} locale={locale} /></div>
-                    <div className="progress-meta"><span>{portal.progress}</span><strong>{Math.min(100, Math.max(0, Number(project.progress) || 0))}%</strong></div>
-                    <div className="progress-track"><span style={{ width: `${Math.min(100, Math.max(0, Number(project.progress) || 0))}%` }} /></div>
+                    <div className="progress-meta"><span>{portal.progress}</span><strong>{progress}%</strong></div>
+                    <div className="progress-track"><span style={{ width: `${progress}%` }} /></div>
                     {project.dueDate && <p className="row-meta">{portal.dueDate}: {formatDate(project.dueDate, locale)}</p>}
                     {project.tasks && project.tasks.length > 0 && <p className="row-meta">{ar ? `المراحل الظاهرة لك: ${project.tasks.filter((task) => task.status === "DONE").length} من ${project.tasks.length}` : `Visible stages: ${project.tasks.filter((task) => task.status === "DONE").length} of ${project.tasks.length}`}</p>}
+                    {plan && (
+                      <p className="row-meta">
+                        {ar ? "الخطة" : "Plan"}: v{plan.version} ·{" "}
+                        {plan.status === "APPROVED"
+                          ? (ar ? "معتمدة" : "approved")
+                          : (ar ? "قيد المراجعة" : "under review")}
+                      </p>
+                    )}
+                    <div className="offer-admin-actions">
+                      <button type="button" disabled={projectBusy === project.id} onClick={() => toggleProjectPlan(project)}>
+                        {expanded ? (ar ? "إخفاء الخطة" : "Hide the plan") : ar ? "عرض الخطة والمراحل" : "Show the plan and phases"}
+                      </button>
+                    </div>
+                    {expanded && plan && plan.phases.length > 0 && (
+                      <div className="client-plan">
+                        {plan.summary && <p className="row-meta">{plan.summary}</p>}
+                        {plan.phases.map((phase) => (
+                          <div className="client-plan-phase" key={phase.key}>
+                            <div className="client-plan-phase-head">
+                              <strong>{phase.title}</strong>
+                              {phase.dueDate && <span className="row-meta">{ar ? "حتى" : "by"} {formatDate(phase.dueDate, locale)}</span>}
+                            </div>
+                            <ul>
+                              {phase.tasks.map((task, index) => (
+                                <li key={`${phase.key}-${index}`}>
+                                  <span>{task.title}</span>
+                                  <StatusPill status={task.status} locale={locale} />
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </article>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>
