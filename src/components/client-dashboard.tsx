@@ -66,8 +66,8 @@ interface ClientAdPlan {
     disclaimerAr: string; disclaimerEn: string;
   };
   forecasts: { isEstimate: true; disclaimerAr: string; disclaimerEn: string; totals: { impressionsLow: number; impressionsHigh: number; clicksLow: number; clicksHigh: number; messagesLow: number; messagesHigh: number } } | null;
-  actuals: { spendMinor: number; impressions: number; clicks: number; messages: number; orders: number; ctr: number | null; cpcMinor: number | null };
-  reports: { id: string; title: string; summary: string; createdAt: string }[];
+  actuals?: { spendMinor: number; impressions: number; clicks: number; messages: number; orders: number; ctr?: number | null; cpcMinor?: number | null };
+  reports?: { id: string; title: string; summary: string; createdAt: string }[];
   disclaimerAr: string; disclaimerEn: string;
 }
 interface PortalData {
@@ -76,6 +76,11 @@ interface PortalData {
   payments: Array<{ id: string; invoiceId?: string | null; amountMinor: number | string; refundedMinor: number | string; currency: string; method: string; status: string; paidAt?: string | null; createdAt: string }>;
   subscriptions: Array<{ id: string; planName: string; amountMinor: number | string; currency: string; status: string; periodEnd?: string | null; nextRenewalAt?: string | null }>,
   campaigns: Campaign[];
+  /**
+   * Approved ads plans from `ofoq_client_dashboard()` (migration 0012).
+   * Production reads this over HTTPS — no DATABASE_URL required.
+   */
+  adPlans?: ClientAdPlan[];
   reports: Array<{ id: string; title: string; summary: string; type: string; createdAt: string }>;
   files: Array<{ id: string; name: string; kind?: string | null; sizeBytes: number | string; createdAt: string }>;
 }
@@ -130,7 +135,11 @@ export function ClientDashboard({ locale }: { locale: Locale }) {
     return () => controller.abort();
   }, []);
 
-  /** Loads the client-safe approved ads plans (drafts never leave the API). */
+  /**
+   * Optional enrichment from GET /api/ads when DATABASE_URL is set.
+   * Production without that variable still shows `data.adPlans` from the
+   * dashboard RPC (0012). A 503 here must never blank the portal.
+   */
   useEffect(() => {
     const controller = new AbortController();
     fetch("/api/ads", { cache: "no-store", signal: controller.signal })
@@ -140,7 +149,7 @@ export function ClientDashboard({ locale }: { locale: Locale }) {
         setAdPlans((payload.data?.rows ?? []) as ClientAdPlan[]);
       })
       .catch(() => {
-        // The portal still shows campaigns from the dashboard payload.
+        // Keep the RPC payload. Staff APIs are an addition, not a requirement.
       });
     return () => controller.abort();
   }, []);
@@ -264,6 +273,10 @@ export function ClientDashboard({ locale }: { locale: Locale }) {
   const activeProjects = data.projects.filter((project) => !["COMPLETED", "CANCELLED"].includes(project.status));
   const pendingOffers = data.offers.filter((offer) => ["DRAFT", "SENT"].includes(offer.status));
   const unpaidInvoices = data.invoices.filter((invoice) => !["PAID", "CANCELLED", "REFUNDED"].includes(invoice.status));
+  // RPC first (production). The Ads API, when it answers, may add reports/KPIs.
+  const visibleAdPlans = ((adPlans && adPlans.length > 0 ? adPlans : data.adPlans) ?? []).filter(
+    (plan) => plan.status === "APPROVED",
+  );
 
   return (
     <div className="dashboard-content">
@@ -397,9 +410,9 @@ export function ClientDashboard({ locale }: { locale: Locale }) {
 
         <section className="platform-card content-card" aria-labelledby="campaigns-heading">
           <div className="card-heading-row"><div><span className="eyebrow">04 / {copy.dashboard.reports}</span><h2 id="campaigns-heading">{ar ? "الخطة الإعلانية" : "Advertising plan"}</h2></div></div>
-          {(adPlans ?? []).length === 0 && data.campaigns.length === 0 ? <EmptyState text={ar ? "لا توجد خطة إعلانية معتمدة لحسابك بعد." : "No approved advertising plan is linked to your account yet."} /> : (
+          {visibleAdPlans.length === 0 && data.campaigns.length === 0 ? <EmptyState text={ar ? "لا توجد خطة إعلانية معتمدة لحسابك بعد." : "No approved advertising plan is linked to your account yet."} /> : (
             <div className="compact-list">
-              {(adPlans ?? []).map((plan) => {
+              {visibleAdPlans.map((plan) => {
                 const open = expandedAdPlan === plan.id;
                 return (
                   <article className="compact-row" key={plan.id}>
@@ -413,26 +426,26 @@ export function ClientDashboard({ locale }: { locale: Locale }) {
                       </div>
                       {open && (
                         <div className="client-plan">
-                          <p className="row-meta">{plan.body.analysis.platformRationale}</p>
+                          <p className="row-meta">{plan.body?.analysis?.platformRationale}</p>
                           <ul>
-                            {plan.body.platforms.map((row) => (
+                            {(plan.body?.platforms ?? []).map((row) => (
                               <li key={row.platform}>
                                 <span>{row.platform.replaceAll("_", " ")} · {row.percent}%</span>
                                 <span>{formatMoney(row.totalBudgetMinor, "USD", locale)}</span>
                               </li>
                             ))}
                           </ul>
-                          <p className="row-meta">{ar ? "الجمهور" : "Audience"}: {plan.body.audience.description}</p>
-                          {plan.body.adCopy.map((copyBlock) => (
+                          <p className="row-meta">{ar ? "الجمهور" : "Audience"}: {plan.body?.audience?.description}</p>
+                          {(plan.body?.adCopy ?? []).map((copyBlock) => (
                             <p className="row-meta" key={copyBlock.platform}><strong>{copyBlock.headline}</strong> — {copyBlock.primaryText}</p>
                           ))}
                           {plan.forecasts && (
                             <p className="row-meta">{ar ? plan.forecasts.disclaimerAr : plan.forecasts.disclaimerEn}</p>
                           )}
                           <p className="row-meta">
-                            {ar ? "النتائج المُدخلة" : "Entered results"}: {formatMoney(plan.actuals.spendMinor, "USD", locale)} · {plan.actuals.impressions} {ar ? "ظهور" : "impr."} · {plan.actuals.clicks} {ar ? "نقرة" : "clicks"}
+                            {ar ? "النتائج المُدخلة" : "Entered results"}: {formatMoney(plan.actuals?.spendMinor ?? 0, "USD", locale)} · {plan.actuals?.impressions ?? 0} {ar ? "ظهور" : "impr."} · {plan.actuals?.clicks ?? 0} {ar ? "نقرة" : "clicks"}
                           </p>
-                          {plan.reports.map((report) => (
+                          {(plan.reports ?? []).map((report) => (
                             <p className="row-meta" key={report.id}><strong>{report.title}</strong> — {report.summary}</p>
                           ))}
                           <p className="row-meta">{ar ? plan.disclaimerAr : plan.disclaimerEn}</p>
@@ -440,7 +453,7 @@ export function ClientDashboard({ locale }: { locale: Locale }) {
                       )}
                     </div>
                     <div className="compact-row-side">
-                      <strong>{formatMoney(plan.body.totalBudgetMinor, "USD", locale)}</strong>
+                      <strong>{formatMoney(plan.body?.totalBudgetMinor ?? 0, "USD", locale)}</strong>
                       <StatusPill status="APPROVED" locale={locale} />
                     </div>
                   </article>

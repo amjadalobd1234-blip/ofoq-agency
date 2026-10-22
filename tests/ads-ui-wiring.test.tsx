@@ -118,6 +118,21 @@ describe("the admin dashboard — the ads panel", () => {
 });
 
 describe("the client portal — approved ads plans", () => {
+  const approvedPlan = {
+    id: "ad-1",
+    code: "OFQ-AD-2026-0001",
+    version: 1,
+    status: "APPROVED",
+    summary: "خطة معتمدة",
+    currency: "USD",
+    body: samplePlan.body,
+    forecasts: samplePlan.forecasts,
+    actuals: { spendMinor: 0, impressions: 0, clicks: 0, messages: 0, orders: 0, ctr: null, cpcMinor: null },
+    reports: [],
+    disclaimerAr: samplePlan.body.disclaimerAr,
+    disclaimerEn: "advisory",
+  };
+
   it("loads approved ads plans from the Ads API and does not render a draft-only payload", async () => {
     responses["GET /api/dashboard"] = {
       data: {
@@ -133,29 +148,34 @@ describe("the client portal — approved ads plans", () => {
       },
     };
     responses["GET /api/projects"] = { data: { rows: [] } };
-    responses["GET /api/ads"] = {
-      data: {
-        rows: [
-          {
-            id: "ad-1",
-            code: "OFQ-AD-2026-0001",
-            version: 1,
-            status: "APPROVED",
-            summary: "خطة معتمدة",
-            currency: "USD",
-            body: samplePlan.body,
-            forecasts: samplePlan.forecasts,
-            actuals: { spendMinor: 0, impressions: 0, clicks: 0, messages: 0, orders: 0, ctr: null, cpcMinor: null },
-            reports: [],
-            disclaimerAr: samplePlan.body.disclaimerAr,
-            disclaimerEn: "advisory",
-          },
-        ],
-      },
-    };
+    responses["GET /api/ads"] = { data: { rows: [approvedPlan] } };
 
     render(<ClientDashboard locale="ar" />);
     await waitFor(() => expect(calls.some((call) => call.url === "/api/ads")).toBe(true));
+    await waitFor(() => expect(screen.getByText(/OFQ-AD-2026-0001/)).toBeTruthy());
+    expect(screen.queryByText("تكلفة داخلية")).toBeNull();
+  });
+
+  it("shows the approved plan from the dashboard RPC when /api/ads is unavailable", async () => {
+    responses["GET /api/dashboard"] = {
+      data: {
+        customer: { id: "c-1", name: "عميل", locale: "ar" },
+        projects: [],
+        offers: [],
+        invoices: [],
+        payments: [],
+        subscriptions: [],
+        campaigns: [],
+        adPlans: [approvedPlan],
+        reports: [],
+        files: [],
+      },
+    };
+    responses["GET /api/projects"] = { data: { rows: [] } };
+    statuses["GET /api/ads"] = 503;
+    responses["GET /api/ads"] = { error: "DATABASE_URL is required", code: "CONFIGURATION_ERROR" };
+
+    render(<ClientDashboard locale="ar" />);
     await waitFor(() => expect(screen.getByText(/OFQ-AD-2026-0001/)).toBeTruthy());
     expect(screen.queryByText("تكلفة داخلية")).toBeNull();
   });

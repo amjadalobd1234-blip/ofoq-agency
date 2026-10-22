@@ -76,7 +76,10 @@
 | إطلاق حملة | `POST /api/ads/[id]/launch` | **مرفوض دائمًا** |
 
 - **لوحة الإدارة:** تبويب «الحملات» (`src/components/admin-ads.tsx`) عبر `/api/ads*`.
-- **بوابة العميل:** قسم «الخطة الإعلانية» يجلب `GET /api/ads`.
+  يحتاج `DATABASE_DRIVER=postgres` + `DATABASE_URL` في الإنتاج (نفس نمط `/api/projects*`).
+  بدون ذلك المسار يرد 503 وليس قائمة فارغة صامتة.
+- **بوابة العميل:** تقرأ الخطة المعتمدة من `ofoq_client_dashboard()` (بعد 0012) عبر
+  `/api/dashboard` — **بدون** `DATABASE_URL`. `GET /api/ads` إضافة اختيارية عند توفر القاعدة.
 
 ## الترحيلات (Migration)
 

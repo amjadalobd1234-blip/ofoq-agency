@@ -106,8 +106,8 @@ beforeAll(async () => {
         internal_note, review_note, created_by_user_id, created_by_agent, approved_by_user_id, approved_at, created_at, updated_at)
      VALUES
        ('ad-approved', 'OFQ-AD-2026-0001', $1, NULL, $1, 1, 'APPROVED', 'ar', 'USD', 'خطة معتمدة',
-        '{"disclaimerAr":"استشارية","disclaimerEn":"advisory","objective":"MESSAGES"}',
-        '{"isEstimate":true,"disclaimerAr":"تقديرات"}',
+        '{"disclaimerAr":"استشارية","disclaimerEn":"advisory","objective":"MESSAGES","secretInternal":"مفتاح سري داخل المتن"}',
+        '{"isEstimate":true,"disclaimerAr":"تقديرات","secretInternal":"توقع سري"}',
         'ملاحظة داخلية سرية', 'مراجعة المالك', $3, 'ads_manager', $3, $2, $2, $2),
        ('ad-draft', 'OFQ-AD-2026-0001', $1, NULL, $1, 2, 'DRAFT', 'ar', 'USD', 'مسودة جديدة',
         '{"disclaimerAr":"مسودة"}', NULL, 'مسودة داخلية', NULL, $3, 'ads_manager', NULL, NULL, $2, $2),
@@ -166,6 +166,11 @@ describe("migration 0012 — ads plans in the client portal", () => {
     expect(JSON.stringify(dashboard)).not.toContain("ملاحظة داخلية سرية");
     expect(JSON.stringify(dashboard)).not.toContain("مسودة داخلية");
     expect(JSON.stringify(dashboard)).not.toContain("مسودة جديدة");
+    expect(JSON.stringify(dashboard)).not.toContain("مفتاح سري داخل المتن");
+    expect(JSON.stringify(dashboard)).not.toContain("توقع سري");
+    expect(JSON.stringify(dashboard)).not.toContain("secretInternal");
+    expect(plans[0]!.body.objective).toBe("MESSAGES");
+    expect(plans[0]!.body.secretInternal).toBeUndefined();
 
     const campaigns = dashboard.campaigns as Record<string, any>[];
     expect(campaigns.map((row) => row.id)).toEqual(["camp-active"]);

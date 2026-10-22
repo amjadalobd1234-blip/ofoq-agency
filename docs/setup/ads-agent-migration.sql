@@ -14,7 +14,9 @@
 -- 4) تحقّق من اكتمال التنفيذ بدون استثناء. إذا فشل الـ preflight، أوقف النشر
 --    وافحص المخطط والصلاحيات قبل إعادة المحاولة.
 -- 5) طبّق هذا الترحيل قبل نشر إصدار التطبيق الذي يعرض الخطة الإعلانية المعتمدة
---    للعميل. مسارات /api/ads* تحتاج DATABASE_URL في الإنتاج (نفس نمط المشاريع).
+--    للعميل. إن كنت تستخدم db:migrate على Postgres، شغّله أولاً (0005) ثم هذا الملف.
+--    مسارات /api/ads* تحتاج DATABASE_URL في الإنتاج (نفس نمط المشاريع).
+--    بوابة العميل تقرأ الخطة المعتمدة من ofoq_client_dashboard() بدون DATABASE_URL.
 --
 -- هذا الملف نسخة يدوية مطابقة للترحيل في
 -- db/migrations/supabase/0012_ad_plans.sql.
@@ -286,6 +288,8 @@ BEGIN
           ) ORDER BY t.sort_order)
           FROM public.project_tasks AS t
           WHERE t.project_id = p.id AND t.visibility = 'CLIENT'
+            -- A task of a plan the owner has not approved is still a
+            -- proposal: it never reaches the client.
             AND (
               t.phase_key IS NULL
               OR EXISTS (
@@ -322,6 +326,9 @@ BEGIN
       ) AS item
     FROM public.offers AS o
     WHERE o.customer_id = v_customer_id
+      -- Positive allowlist of published offer states. DRAFT is internal
+      -- (including guided service requests awaiting staff review), and
+      -- EXPIRED/CANCELLED were already hidden by the original dashboard.
       AND o.status IN ('SENT', 'APPROVED', 'REJECTED')
     ORDER BY o.created_at DESC
     LIMIT 20
@@ -361,6 +368,8 @@ BEGIN
   ) ORDER BY c.created_at DESC), '[]'::jsonb) INTO v_campaigns
   FROM public.campaigns AS c
   WHERE c.customer_id = v_customer_id
+    -- Live campaigns only. DRAFT / PENDING_APPROVAL are internal proposals
+    -- (same rule as ads plans: the client never sees unapproved work).
     AND c.status IN ('ACTIVE', 'PAUSED', 'COMPLETED');
 
   SELECT coalesce(jsonb_agg(jsonb_build_object(
@@ -389,8 +398,34 @@ BEGIN
         'summary', ap.summary,
         'currency', ap.currency,
         'approvedAt', ap.approved_at,
-        'body', ap.body::jsonb,
-        'forecasts', CASE WHEN ap.forecasts IS NULL OR ap.forecasts = '' THEN NULL ELSE ap.forecasts::jsonb END,
+        -- Explicit client-safe projection: never dump body/forecasts JSON as-is
+        -- (extra keys such as an internal note must not reach the portal).
+        'body', jsonb_build_object(
+          'brief', ap.body::jsonb->>'brief',
+          'businessCategory', ap.body::jsonb->>'businessCategory',
+          'objective', ap.body::jsonb->>'objective',
+          'audience', coalesce(ap.body::jsonb->'audience', '{}'::jsonb),
+          'platforms', coalesce(ap.body::jsonb->'platforms', '[]'::jsonb),
+          'durationDays', ap.body::jsonb->'durationDays',
+          'dailyBudgetMinor', ap.body::jsonb->'dailyBudgetMinor',
+          'totalBudgetMinor', ap.body::jsonb->'totalBudgetMinor',
+          'currency', 'USD',
+          'adIdeas', coalesce(ap.body::jsonb->'adIdeas', '[]'::jsonb),
+          'adCopy', coalesce(ap.body::jsonb->'adCopy', '[]'::jsonb),
+          'kpis', coalesce(ap.body::jsonb->'kpis', '[]'::jsonb),
+          'analysis', coalesce(ap.body::jsonb->'analysis', '{}'::jsonb),
+          'disclaimerAr', ap.body::jsonb->>'disclaimerAr',
+          'disclaimerEn', ap.body::jsonb->>'disclaimerEn'
+        ),
+        'forecasts', CASE
+          WHEN ap.forecasts IS NULL OR ap.forecasts = '' THEN NULL
+          ELSE jsonb_build_object(
+            'isEstimate', true,
+            'disclaimerAr', ap.forecasts::jsonb->>'disclaimerAr',
+            'disclaimerEn', ap.forecasts::jsonb->>'disclaimerEn',
+            'totals', coalesce(ap.forecasts::jsonb->'totals', '{}'::jsonb)
+          )
+        END,
         'disclaimerAr', ap.body::jsonb->>'disclaimerAr',
         'disclaimerEn', ap.body::jsonb->>'disclaimerEn',
         'actuals', jsonb_build_object(
@@ -399,7 +434,8 @@ BEGIN
           'clicks', coalesce((SELECT sum(r.clicks) FROM public.ad_plan_results AS r WHERE r.ad_plan_id = ap.id), 0),
           'messages', coalesce((SELECT sum(r.messages) FROM public.ad_plan_results AS r WHERE r.ad_plan_id = ap.id), 0),
           'orders', coalesce((SELECT sum(r.orders) FROM public.ad_plan_results AS r WHERE r.ad_plan_id = ap.id), 0)
-        )
+        ),
+        'reports', '[]'::jsonb
       ) AS item
     FROM public.ad_plans AS ap
     WHERE ap.customer_id = v_customer_id
