@@ -26,11 +26,12 @@ import { getSupabaseAuthStorageKey, getSupabaseConfig } from "@/lib/supabase/con
  * -----------------------
  * Every surface that reads the session server-side is listed in `config.matcher`
  * below — the pages AND the API routes they call (`/api/admin/:path*`,
- * `/api/dashboard`, `/api/me`, `/api/debug/:path*`, `/api/email/:path*`). An API
- * route that is not matched still receives the browser's cookies, but nothing
- * refreshes them: an expired access token then fails at `auth.getUser()` and the
- * staff page reports an auth error even though the same user just used a page
- * successfully.
+ * `/api/dashboard`, `/api/me`, `/api/debug/:path*`, `/api/email/:path*`, plus
+ * the agent APIs `/api/offers/:path*`, `/api/projects/:path*`, `/api/ads/:path*`
+ * that read the caller through `resolveRouteActor`). An API route that is not
+ * matched still receives the browser's cookies, but nothing refreshes them: an
+ * expired access token then fails at `auth.getUser()` and the page reports an
+ * auth error even though the same user just used a page successfully.
  *
  * `tests/admin-alert-diagnostics.test.ts` («covers every session-reading API
  * route in the middleware matcher») walks src/app/api, finds every route that
@@ -92,6 +93,14 @@ export const config = {
     "/api/admin/:path*",
     "/api/dashboard",
     "/api/me",
+    // Platform APIs of the five agents (offers, projects, ads). They resolve
+    // the caller through `resolveRouteActor`, i.e. they read the Supabase
+    // session too — without an entry here their request can carry an access
+    // token that expired since the page loaded, and the action fails with 401
+    // even though the user is signed in.
+    "/api/offers/:path*",
+    "/api/projects/:path*",
+    "/api/ads/:path*",
     // Guided service request: the AI intent layer and the completion report both
     // read the session (`requireSupabaseUser`), so they need the refresh too.
     "/api/chat/:path*",

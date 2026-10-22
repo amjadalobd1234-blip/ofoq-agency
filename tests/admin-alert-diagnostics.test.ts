@@ -279,9 +279,17 @@ describe("wiring guards", () => {
       // `requireStaffAccess(` counts too: the two dedicated alert action routes
       // read the session through the shared gate, and they must still be covered
       // by the matcher or a refresh never reaches them.
+      // `resolveRouteActor(` / `resolveOffersActor(` count as well: the agent
+      // APIs (offers, projects, ads) read the same Supabase session through
+      // that shared guard, so they need the refresh for the same reason.
       .filter((file) => {
         const source = fs.readFileSync(file, "utf8");
-        return source.includes("requireSupabaseUser(") || source.includes("requireStaffAccess(");
+        return (
+          source.includes("requireSupabaseUser(") ||
+          source.includes("requireStaffAccess(") ||
+          source.includes("resolveRouteActor(") ||
+          source.includes("resolveOffersActor(")
+        );
       })
       .map((file) => {
         const segments = path
