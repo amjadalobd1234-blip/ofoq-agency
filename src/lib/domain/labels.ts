@@ -108,10 +108,18 @@ export const CUSTOMER_STATUS: Record<string, Entry> = {
 
 export const CAMPAIGN_STATUS: Record<string, Entry> = {
   DRAFT: label("مسودة", "Draft"),
+  PENDING_APPROVAL: label("بانتظار الموافقة", "Pending approval"),
   ACTIVE: label("نشطة", "Active"),
   PAUSED: label("متوقفة مؤقتًا", "Paused"),
   COMPLETED: label("منتهية", "Completed"),
   ARCHIVED: label("مؤرشفة", "Archived"),
+};
+
+export const AD_PLAN_STATUS: Record<string, Entry> = {
+  DRAFT: label("مسودة", "Draft"),
+  AWAITING_APPROVAL: label("بانتظار موافقة المالك", "Awaiting owner approval"),
+  APPROVED: label("معتمدة", "Approved"),
+  SUPERSEDED: label("نسخة سابقة", "Superseded"),
 };
 
 export const SYNC_STATUS: Record<string, Entry> = {

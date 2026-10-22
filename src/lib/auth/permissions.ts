@@ -37,6 +37,7 @@ export const CAPABILITIES = [
   "subscriptions.manage",
   "campaigns.view",
   "campaigns.manage",
+  "campaigns.plan.approve",
   "reports.view",
   "reports.send",
   "alerts.view",
@@ -71,20 +72,22 @@ const CLIENT_CAPABILITIES: Capability[] = [
   "conversations.view",
   "files.view",
   "reviews.view",
+  "campaigns.view",
 ];
 
 /**
  * Capabilities reserved to the owner.
  *
  * Besides the irreversible platform-wide deletion, the owner alone approves a
- * project plan (a commitment to the client) and closes a project. A partner can
- * prepare, review and execute, but the commitment and the closure stay with the
- * owner.
+ * project plan (a commitment to the client), an advertising plan (advice the
+ * client will see), and closes a project. A partner can prepare, review and
+ * execute, but those commitments stay with the owner.
  */
 const OWNER_ONLY_CAPABILITIES: Capability[] = [
   "system.dangerous_delete",
   "projects.plan.approve",
   "projects.close",
+  "campaigns.plan.approve",
 ];
 
 /**

@@ -363,6 +363,7 @@ export async function createReport(
     customer_id: data.customer_id,
     project_id: data.project_id ?? null,
     campaign_id: data.campaign_id ?? null,
+    ad_plan_id: data.ad_plan_id ?? null,
     report_type: data.report_type,
     language: data.language ?? "ar",
     period_start: data.period_start ?? null,
@@ -398,7 +399,9 @@ export async function listReports(
   filter: {
     customerId?: string;
     campaignId?: string;
+    adPlanId?: string;
     reportType?: ReportType;
+    status?: ReportRow["status"];
     limit?: number;
     offset?: number;
   } = {},
@@ -416,9 +419,17 @@ export async function listReports(
     clauses.push("campaign_id = ?");
     params.push(filter.campaignId);
   }
+  if (filter.adPlanId) {
+    clauses.push("ad_plan_id = ?");
+    params.push(filter.adPlanId);
+  }
   if (filter.reportType) {
     clauses.push("report_type = ?");
     params.push(filter.reportType);
+  }
+  if (filter.status) {
+    clauses.push("status = ?");
+    params.push(filter.status);
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const totalRow = await driver.get<{ total: number }>(

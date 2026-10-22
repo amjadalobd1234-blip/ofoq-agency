@@ -15,6 +15,10 @@ const projectPlanMigration = fs.readFileSync(
   path.join(process.cwd(), "db", "migrations", "supabase", "0011_project_plans.sql"),
   "utf8",
 );
+const adsPlanMigration = fs.readFileSync(
+  path.join(process.cwd(), "db", "migrations", "supabase", "0012_ad_plans.sql"),
+  "utf8",
+);
 
 /** Extract the latest RPC definition when the generated bundle includes 0008 and 0010. */
 function functionDdl(source: string): string {
@@ -75,12 +79,16 @@ describe("docs/setup/service-requests-migration.sql — hardened manual migratio
     expect(dashboardDdl(file)).not.toContain("o.status NOT IN ('CANCELLED', 'EXPIRED')");
   });
 
-  it("keeps the offer hardening in the newest dashboard of the bundle (0011)", () => {
-    // … while the generated bundle now carries the 0011 replacement, which adds
-    // the project plan to the client dashboard and keeps the offer allowlist.
-    expect(dashboardDdl(bundle)).toBe(dashboardDdl(projectPlanMigration));
+  it("keeps the offer hardening in the newest dashboard of the bundle (0012)", () => {
+    // … while the generated bundle now carries the 0012 replacement, which adds
+    // approved ads plans to the client dashboard and keeps the offer allowlist
+    // and the 0011 project-plan behaviour.
+    expect(dashboardDdl(bundle)).toBe(dashboardDdl(adsPlanMigration));
     expect(dashboardDdl(bundle)).toContain("o.status IN ('SENT', 'APPROVED', 'REJECTED')");
     expect(dashboardDdl(bundle)).not.toContain("o.status NOT IN ('CANCELLED', 'EXPIRED')");
     expect(dashboardDdl(bundle)).toContain("public.project_plans");
+    expect(dashboardDdl(bundle)).toContain("adPlans");
+    expect(dashboardDdl(bundle)).toContain("AND ap.status = 'APPROVED'");
+    void projectPlanMigration;
   });
 });

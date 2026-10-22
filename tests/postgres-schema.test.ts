@@ -37,7 +37,7 @@ describe("PostgreSQL schema artifacts", () => {
     expect(setupSql).toBe(renderSupabaseSetupSql(expected));
   });
 
-  it("contains the 36 application tables and 39 total setup tables", () => {
+  it("contains the 38 application tables and 41 total setup tables", () => {
     const sourceTables = listMigrations(path.join(rootDir, "db", "migrations", "sqlite"))
       .filter((migration) => !migration.sql.includes("-- @postgres-skip:"))
       .flatMap((migration) => splitStatements(migration.sql))
@@ -52,11 +52,11 @@ describe("PostgreSQL schema artifacts", () => {
       .map(tableName)
       .filter((name): name is string => Boolean(name));
 
-    expect(new Set(sourceTables).size).toBe(36);
-    expect(new Set(postgresTables).size).toBe(36);
-    // 36 application tables + _migrations + Supabase ai_usage + the private
+    expect(new Set(sourceTables).size).toBe(38);
+    expect(new Set(postgresTables).size).toBe(38);
+    // 38 application tables + _migrations + Supabase ai_usage + the private
     // service-request pricing-verification table.
-    expect(new Set(setupTables).size).toBe(39);
+    expect(new Set(setupTables).size).toBe(41);
     expect(new Set(setupTables)).toContain("_migrations");
     expect(new Set(setupTables)).toContain("users");
     expect(new Set(setupTables)).toContain("job_runs");
@@ -66,6 +66,11 @@ describe("PostgreSQL schema artifacts", () => {
     expect(new Set(sourceTables)).toContain("project_plans");
     expect(new Set(postgresTables)).toContain("project_plans");
     expect(new Set(setupTables)).toContain("project_plans");
+    expect(new Set(sourceTables)).toContain("ad_plans");
+    expect(new Set(postgresTables)).toContain("ad_plans");
+    expect(new Set(setupTables)).toContain("ad_plans");
+    expect(new Set(sourceTables)).toContain("ad_plan_results");
+    expect(new Set(setupTables)).toContain("ad_plan_results");
   });
 
   it("orders foreign-key dependencies before dependent PostgreSQL tables", () => {
@@ -126,11 +131,12 @@ describe("PostgreSQL schema artifacts", () => {
       expect(setupSql).toContain(`'${migration.id}', '${migration.name}', '${migration.checksum}'`);
     }
 
-    expect(migrations.map(({ id }) => id)).toEqual(["0001", "0002", "0004", "0005", "0006"]);
+    expect(migrations.map(({ id }) => id)).toEqual(["0001", "0002", "0004", "0005", "0006", "0007"]);
     // RLS is enabled after every table migration, so the tables exist first.
-    expect(migrations[3].sql).toContain("ENABLE ROW LEVEL SECURITY");
-    expect(migrations[3].sql).toContain("ALTER TABLE public.project_plans ENABLE ROW LEVEL SECURITY;");
-    expect(migrations[4].sql).toContain("ALTER TABLE public.offers ALTER COLUMN subtotal_minor DROP NOT NULL;");
-    expect(migrations[4].sql).toContain("ALTER TABLE public.offers ALTER COLUMN total_minor DROP NOT NULL;");
+    expect(migrations[4].sql).toContain("ENABLE ROW LEVEL SECURITY");
+    expect(migrations[4].sql).toContain("ALTER TABLE public.project_plans ENABLE ROW LEVEL SECURITY;");
+    expect(migrations[4].sql).toContain("ALTER TABLE public.ad_plans ENABLE ROW LEVEL SECURITY;");
+    expect(migrations[5].sql).toContain("ALTER TABLE public.offers ALTER COLUMN subtotal_minor DROP NOT NULL;");
+    expect(migrations[5].sql).toContain("ALTER TABLE public.offers ALTER COLUMN total_minor DROP NOT NULL;");
   });
 });

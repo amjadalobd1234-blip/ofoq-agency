@@ -4,7 +4,7 @@
 
 ## 1. إعداد مخطط Supabase
 
-المستودع يضم مخطط الوكالة الحالي (35 جدول تطبيق + جدول تتبّع الترحيلات + جدول سجل استخدام الذكاء الاصطناعي `ai_usage` = 37 جدولًا) وملفات إضافية تربط Auth بملف العميل وتضيف سياسات RLS وإجراءات REST الآمنة.
+المستودع يضم مخطط الوكالة الحالي (38 جدول تطبيق + جدول تتبّع الترحيلات + جدول سجل استخدام الذكاء الاصطناعي `ai_usage` = 40 جدولًا، بالإضافة إلى جدول التحقق الخاص بطلبات الخدمة) وملفات إضافية تربط Auth بملف العميل وتضيف سياسات RLS وإجراءات REST الآمنة.
 
 1. افتح مشروع Supabase ثم **SQL Editor**.
 2. افتح `docs/setup/supabase-setup.sql` من المستودع وانسخ محتواه كاملًا.
@@ -146,8 +146,10 @@ DATABASE_URL=postgresql://postgres.<project-ref>:<password>@aws-0-<region>.poole
    DATABASE_DRIVER=postgres DATABASE_URL="<the same secret>" npm run db:migrate
    ```
    (المولَّد: `npm run db:generate-postgres` — ينتج `db/migrations/postgres/*.sql`).
-3. تطبيق ترحيل Supabase `db/migrations/supabase/0011_project_plans.sql` يدويًا في
-   SQL Editor (لم يُطبَّق من هذا المستودع).
+3. تطبيق ترحيلي Supabase يدويًا في SQL Editor (لم يُطبَّقا من هذا المستودع):
+   `db/migrations/supabase/0011_project_plans.sql` ثم
+   `db/migrations/supabase/0012_ad_plans.sql` (أو النسخة اليدوية
+   `docs/setup/ads-agent-migration.sql`).
 
 **سلوك التطبيق在没有 هذا الإعداد:** لا يوجد سقوط صامت. عند غياب `DATABASE_URL` مع
 `DATABASE_DRIVER=postgres` تردّ المسارات بـ `503` ورمز `CONFIGURATION_ERROR` ورسالة تذكر
@@ -155,9 +157,9 @@ DATABASE_URL=postgresql://postgres.<project-ref>:<password>@aws-0-<region>.poole
 بـ `503` أيضًا بدل خطأ `500` مبهم أو — وهو الأخطر — الكتابة في قاعدة محلية معزولة
 والاعتقاد بأننا نعمل على قاعدة الإنتاج.
 
-**ما يعمل بدون `DATABASE_URL`:** بوابة العميل (تقدّم المشروع، الخطة المعتمدة، المراحل)
-تقرأ `ofoq_client_dashboard()` من Supabase عبر HTTPS، وتعرض الخطة المعتمدة بعد تطبيق
-ترحيل 0011. أما إنشاء/اعتماد/إغلاق مشروع من لوحة الإدارة فيحتاج `DATABASE_URL`.
+**ما يعمل بدون `DATABASE_URL`:** بوابة العميل (تقدّم المشروع، الخطة المعتمدة، المراحل،
+والخطة الإعلانية المعتمدة بعد 0012) تقرأ `ofoq_client_dashboard()` من Supabase عبر HTTPS.
+أما إنشاء/اعتماد مشروع أو خطة إعلانية من لوحة الإدارة فيحتاج `DATABASE_URL`.
 
 ## 3-ب. وضع الوسيط — تجاوز حجب `*.supabase.co` (العراق ودول أخرى)
 

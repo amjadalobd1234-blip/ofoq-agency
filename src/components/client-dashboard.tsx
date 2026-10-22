@@ -52,6 +52,24 @@ interface Campaign {
   id: string; name: string; platform: string; status: string; currency: string;
   totalBudgetMinor: number | string; spentMinor: number | string; syncStatus: string;
 }
+interface ClientAdPlan {
+  id: string; code: string; version: number; status: string; summary: string | null;
+  currency: string; approvedAt?: string | null;
+  body: {
+    objective: string; durationDays: number; dailyBudgetMinor: number; totalBudgetMinor: number;
+    platforms: { platform: string; percent: number; dailyBudgetMinor: number; totalBudgetMinor: number; rationale: string }[];
+    audience: { description: string; geo: string[] };
+    adCopy: { platform: string; headline: string; primaryText: string; cta: string }[];
+    adIdeas: { title: string; format: string; description: string }[];
+    kpis: { key: string; labelAr: string; labelEn: string; target: string | null }[];
+    analysis: { business: string; audience: string; platformRationale: string };
+    disclaimerAr: string; disclaimerEn: string;
+  };
+  forecasts: { isEstimate: true; disclaimerAr: string; disclaimerEn: string; totals: { impressionsLow: number; impressionsHigh: number; clicksLow: number; clicksHigh: number; messagesLow: number; messagesHigh: number } } | null;
+  actuals: { spendMinor: number; impressions: number; clicks: number; messages: number; orders: number; ctr: number | null; cpcMinor: number | null };
+  reports: { id: string; title: string; summary: string; createdAt: string }[];
+  disclaimerAr: string; disclaimerEn: string;
+}
 interface PortalData {
   customer: { id: string; name: string; companyName?: string | null; email?: string | null; locale: string } | null;
   projects: Project[]; offers: Offer[]; invoices: Invoice[];
@@ -91,6 +109,8 @@ export function ClientDashboard({ locale }: { locale: Locale }) {
   const [projectDetails, setProjectDetails] = useState<Record<string, ClientProjectDetail>>({});
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
   const [projectBusy, setProjectBusy] = useState<string | null>(null);
+  const [adPlans, setAdPlans] = useState<ClientAdPlan[] | null>(null);
+  const [expandedAdPlan, setExpandedAdPlan] = useState<string | null>(null);
 
   /** Loads the client-safe project list (progress + plan state). */
   useEffect(() => {
@@ -107,6 +127,21 @@ export function ClientDashboard({ locale }: { locale: Locale }) {
         // Projects API is an addition, never a requirement to read the portal.
       })
       .finally(() => { if (!controller.signal.aborted) setProjectBusy(null); });
+    return () => controller.abort();
+  }, []);
+
+  /** Loads the client-safe approved ads plans (drafts never leave the API). */
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/ads", { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const payload = await response.json().catch(() => ({}));
+        setAdPlans((payload.data?.rows ?? []) as ClientAdPlan[]);
+      })
+      .catch(() => {
+        // The portal still shows campaigns from the dashboard payload.
+      });
     return () => controller.abort();
   }, []);
 
@@ -361,12 +396,61 @@ export function ClientDashboard({ locale }: { locale: Locale }) {
         </section>
 
         <section className="platform-card content-card" aria-labelledby="campaigns-heading">
-          <div className="card-heading-row"><div><span className="eyebrow">04 / {copy.dashboard.reports}</span><h2 id="campaigns-heading">{copy.dashboard.campaigns}</h2></div></div>
-          {data.campaigns.length === 0 ? <EmptyState text={ar ? "لا توجد حملات مرتبطة بحسابك بعد." : "No campaigns are linked to your account yet."} /> : (
-            <div className="compact-list">{data.campaigns.map((campaign) => <article className="compact-row" key={campaign.id}>
-              <div className="compact-row-copy"><strong>{campaign.name}</strong><span>{campaign.platform.replaceAll("_", " ")} · {campaign.syncStatus === "DISABLED" ? (ar ? "التكامل غير مربوط" : "Integration not connected") : campaign.syncStatus}</span></div>
-              <div className="compact-row-side"><strong>{formatMoney(campaign.spentMinor, campaign.currency, locale)}</strong><StatusPill status={campaign.status} locale={locale} /></div>
-            </article>)}</div>
+          <div className="card-heading-row"><div><span className="eyebrow">04 / {copy.dashboard.reports}</span><h2 id="campaigns-heading">{ar ? "الخطة الإعلانية" : "Advertising plan"}</h2></div></div>
+          {(adPlans ?? []).length === 0 && data.campaigns.length === 0 ? <EmptyState text={ar ? "لا توجد خطة إعلانية معتمدة لحسابك بعد." : "No approved advertising plan is linked to your account yet."} /> : (
+            <div className="compact-list">
+              {(adPlans ?? []).map((plan) => {
+                const open = expandedAdPlan === plan.id;
+                return (
+                  <article className="compact-row" key={plan.id}>
+                    <div className="compact-row-copy">
+                      <strong>{plan.code}</strong>
+                      <span>{plan.summary}</span>
+                      <div className="offer-admin-actions">
+                        <button type="button" onClick={() => setExpandedAdPlan(open ? null : plan.id)}>
+                          {open ? (ar ? "إخفاء الخطة" : "Hide the plan") : ar ? "عرض الخطة المعتمدة" : "Show the approved plan"}
+                        </button>
+                      </div>
+                      {open && (
+                        <div className="client-plan">
+                          <p className="row-meta">{plan.body.analysis.platformRationale}</p>
+                          <ul>
+                            {plan.body.platforms.map((row) => (
+                              <li key={row.platform}>
+                                <span>{row.platform.replaceAll("_", " ")} · {row.percent}%</span>
+                                <span>{formatMoney(row.totalBudgetMinor, "USD", locale)}</span>
+                              </li>
+                            ))}
+                          </ul>
+                          <p className="row-meta">{ar ? "الجمهور" : "Audience"}: {plan.body.audience.description}</p>
+                          {plan.body.adCopy.map((copyBlock) => (
+                            <p className="row-meta" key={copyBlock.platform}><strong>{copyBlock.headline}</strong> — {copyBlock.primaryText}</p>
+                          ))}
+                          {plan.forecasts && (
+                            <p className="row-meta">{ar ? plan.forecasts.disclaimerAr : plan.forecasts.disclaimerEn}</p>
+                          )}
+                          <p className="row-meta">
+                            {ar ? "النتائج المُدخلة" : "Entered results"}: {formatMoney(plan.actuals.spendMinor, "USD", locale)} · {plan.actuals.impressions} {ar ? "ظهور" : "impr."} · {plan.actuals.clicks} {ar ? "نقرة" : "clicks"}
+                          </p>
+                          {plan.reports.map((report) => (
+                            <p className="row-meta" key={report.id}><strong>{report.title}</strong> — {report.summary}</p>
+                          ))}
+                          <p className="row-meta">{ar ? plan.disclaimerAr : plan.disclaimerEn}</p>
+                        </div>
+                      )}
+                    </div>
+                    <div className="compact-row-side">
+                      <strong>{formatMoney(plan.body.totalBudgetMinor, "USD", locale)}</strong>
+                      <StatusPill status="APPROVED" locale={locale} />
+                    </div>
+                  </article>
+                );
+              })}
+              {data.campaigns.map((campaign) => <article className="compact-row" key={campaign.id}>
+                <div className="compact-row-copy"><strong>{campaign.name}</strong><span>{campaign.platform.replaceAll("_", " ")} · {campaign.syncStatus === "DISABLED" || campaign.syncStatus === "NOT_CONNECTED" ? (ar ? "التكامل غير مربوط" : "Integration not connected") : campaign.syncStatus}</span></div>
+                <div className="compact-row-side"><strong>{formatMoney(campaign.spentMinor, campaign.currency, locale)}</strong><StatusPill status={campaign.status} locale={locale} /></div>
+              </article>)}
+            </div>
           )}
         </section>
 
