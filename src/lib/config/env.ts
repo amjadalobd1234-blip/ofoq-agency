@@ -1,4 +1,5 @@
 import { loadEnvFiles } from "./load-env";
+import path from "node:path";
 
 loadEnvFiles();
 
@@ -280,6 +281,18 @@ export function getEnv(): AppEnv {
  * Production hardening checks. Returns human-readable warnings; the CLI
  * (`npm run db:status`) prints them and `/api/health` exposes a boolean.
  */
+/**
+ * True when the SQLite file lives inside the deployment bundle.
+ *
+ * A serverless deployment (Netlify, Cloudflare Pages) has no persistent
+ * filesystem there, so the file cannot hold the platform data.
+ */
+export function isBundleLocalPath(file: string): boolean {
+  const resolved = path.resolve(file);
+  const root = path.resolve(process.cwd());
+  return resolved === root || resolved.startsWith(root + path.sep);
+}
+
 export function configWarnings(env: AppEnv = getEnv()): string[] {
   const warnings: string[] = [];
   if (!env.isProduction) return warnings;
@@ -300,6 +313,21 @@ export function configWarnings(env: AppEnv = getEnv()): string[] {
   }
   if (env.database.driver === "sqlite" && !env.database.sqlitePath.includes("/")) {
     warnings.push("SQLITE_PATH has no directory component; make sure it is a persistent volume in production.");
+  }
+  if (env.database.driver === "postgres" && !env.database.url) {
+    warnings.push(
+      "DATABASE_DRIVER=postgres without DATABASE_URL: the agency APIs will answer 503 instead of falling back to a local store (see docs/DEPLOY-AR.md).",
+    );
+  }
+  if (env.database.driver === "sqlite") {
+    warnings.push(
+      "DATABASE_DRIVER=sqlite: this deployment writes to the local store. Set DATABASE_URL (with DATABASE_DRIVER=postgres) to work on the platform database — see docs/DEPLOY-AR.md.",
+    );
+    if (isBundleLocalPath(env.database.sqlitePath)) {
+      warnings.push(
+        "SQLITE_PATH is inside the deployment bundle: a serverless deployment has no persistent disk there — point SQLITE_PATH at a persistent volume or use PostgreSQL.",
+      );
+    }
   }
   if (!env.cronSecret) {
     warnings.push("CRON_SECRET is empty: /api/cron/* endpoints are disabled.");

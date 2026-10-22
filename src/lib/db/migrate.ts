@@ -94,7 +94,13 @@ export async function runMigrations(
 
   for (const file of files) {
     const existing = appliedById.get(file.id);
-    if (existing) {
+    // A different migration under the same id: the generator renumbered its
+    // output (the PostgreSQL files are derived from the SQLite ones). The new
+    // file takes the id over — it is applied and the bookkeeping row is
+    // rewritten. Editing a migration in place keeps the same id AND the same
+    // name, and that is still refused.
+    const takesOverId = Boolean(existing) && existing!.name !== file.name;
+    if (existing && !takesOverId) {
       if (existing.checksum !== file.checksum) {
         throw new Error(
           `Migration ${file.filename} was modified after it was applied (checksum mismatch). ` +
@@ -125,10 +131,17 @@ export async function runMigrations(
             throw new Error(`${file.filename} would leave ${violations.length} foreign-key violation(s); the migration was rolled back`);
           }
         }
-        await tx.run(
-          "INSERT INTO _migrations (id, name, checksum, applied_at, duration_ms) VALUES (?, ?, ?, ?, ?)",
-          [file.id, file.name, file.checksum, new Date().toISOString(), 0],
-        );
+        if (takesOverId) {
+          await tx.run(
+            "UPDATE _migrations SET name = ?, checksum = ?, applied_at = ?, duration_ms = 0 WHERE id = ?",
+            [file.name, file.checksum, new Date().toISOString(), file.id],
+          );
+        } else {
+          await tx.run(
+            "INSERT INTO _migrations (id, name, checksum, applied_at, duration_ms) VALUES (?, ?, ?, ?, ?)",
+            [file.id, file.name, file.checksum, new Date().toISOString(), 0],
+          );
+        }
       });
     } finally {
       if (rebuildsSqliteParentTable) await db.exec("PRAGMA foreign_keys = ON");
@@ -138,7 +151,7 @@ export async function runMigrations(
       file.id,
     ]);
 
-    log(`  ✔ ${file.filename}`);
+    log(`  ${takesOverId ? "↻" : "✔"} ${file.filename}`);
     report.applied.push(file.filename);
   }
 
@@ -258,6 +271,9 @@ function translateLine(line: string): string {
     [/\bREAL\b/g, "DOUBLE PRECISION"],
     // Monetary and counter columns stay integer, widened for headroom.
     [/\bINTEGER\b/g, "BIGINT"],
+    // Postgres can add a column conditionally, so the setup script stays
+    // re-runnable. SQLite has no such syntax, but it never sees this dialect.
+    [/\bADD\s+COLUMN\s+(?!IF\s+NOT\s+EXISTS)/gi, "ADD COLUMN IF NOT EXISTS "],
   ]);
 }
 

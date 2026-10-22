@@ -21,6 +21,8 @@ export const CAPABILITIES = [
   "requests.manage",
   "projects.view",
   "projects.manage",
+  "projects.plan.approve",
+  "projects.close",
   "tasks.manage",
   "offers.view",
   "offers.manage",
@@ -72,12 +74,26 @@ const CLIENT_CAPABILITIES: Capability[] = [
 ];
 
 /**
- * Partner capabilities: the full staff set minus the irreversible deletion
- * capability. Written as an explicit list so adding a capability is a deliberate
- * decision rather than something that silently lands in a partner's hands.
+ * Capabilities reserved to the owner.
+ *
+ * Besides the irreversible platform-wide deletion, the owner alone approves a
+ * project plan (a commitment to the client) and closes a project. A partner can
+ * prepare, review and execute, but the commitment and the closure stay with the
+ * owner.
+ */
+const OWNER_ONLY_CAPABILITIES: Capability[] = [
+  "system.dangerous_delete",
+  "projects.plan.approve",
+  "projects.close",
+];
+
+/**
+ * Partner capabilities: the full staff set minus the owner-only capabilities.
+ * Written as an explicit list so adding a capability is a deliberate decision
+ * rather than something that silently lands in a partner's hands.
  */
 const PARTNER_CAPABILITIES: Capability[] = CAPABILITIES.filter(
-  (capability) => capability !== "system.dangerous_delete",
+  (capability) => !OWNER_ONLY_CAPABILITIES.includes(capability),
 );
 
 const ROLE_CAPABILITIES: Record<UserRole, ReadonlySet<Capability>> = {

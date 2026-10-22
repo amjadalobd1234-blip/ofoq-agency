@@ -41,6 +41,16 @@ export type TaskStatus = "TODO" | "IN_PROGRESS" | "BLOCKED" | "REVIEW" | "DONE";
 export type Visibility = "CLIENT" | "INTERNAL";
 export type RiskLevel = "LOW" | "MEDIUM" | "HIGH";
 
+/**
+ * Plan lifecycle (وكيل إدارة المشاريع).
+ *
+ * DRAFT          → the plan is being written (by the owner or proposed by the AI).
+ * AWAITING_APPROVAL → the plan was submitted and waits for the owner's decision.
+ * APPROVED       → the owner approved it; only now is it a commitment.
+ * SUPERSEDED     → an older version of the plan, kept for the audit trail.
+ */
+export type ProjectPlanStatus = "DRAFT" | "AWAITING_APPROVAL" | "APPROVED" | "SUPERSEDED";
+
 export type OfferStatus = "DRAFT" | "SENT" | "APPROVED" | "REJECTED" | "EXPIRED" | "CANCELLED";
 
 export type InvoiceStatus =
@@ -247,6 +257,46 @@ export interface ProjectTaskRow {
   due_date: string | null;
   completed_at: string | null;
   assigned_agent: string | null;
+  /** Internal note — never sent to the client (unlike `description`). */
+  internal_note: string | null;
+  /** The plan phase this task belongs to (`project_plans.phases[].key`). */
+  phase_key: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One phase of a project plan: a milestone with its own deadline and owner. */
+export interface ProjectPlanPhase {
+  key: string;
+  title: string;
+  titleEn?: string | null;
+  /** Deadline of the phase (ISO date). */
+  dueDate?: string | null;
+  /** Responsible role/agent key (e.g. `project_manager`, `content`). */
+  owner?: string | null;
+  /** Human label of the responsible party, shown to staff only. */
+  ownerLabel?: string | null;
+  /** `CLIENT` when at least one task of the phase is visible to the client. */
+  visibility?: Visibility;
+  tasks?: { title: string; titleEn?: string | null; dueDate?: string | null; owner?: string | null; visibility: Visibility }[];
+}
+
+export interface ProjectPlanRow {
+  id: string;
+  project_id: string;
+  version: number;
+  status: ProjectPlanStatus;
+  locale: Locale;
+  summary: string | null;
+  /** The phase structure, stored as JSON text. */
+  phases: string;
+  start_date: string | null;
+  due_date: string | null;
+  created_by_user_id: string | null;
+  created_by_agent: string | null;
+  approved_by_user_id: string | null;
+  approved_at: string | null;
+  review_note: string | null;
   created_at: string;
   updated_at: string;
 }

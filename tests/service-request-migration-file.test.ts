@@ -11,6 +11,10 @@ const migration = fs.readFileSync(
   path.join(process.cwd(), "db", "migrations", "supabase", "0010_harden_service_requests_and_offer_access.sql"),
   "utf8",
 );
+const projectPlanMigration = fs.readFileSync(
+  path.join(process.cwd(), "db", "migrations", "supabase", "0011_project_plans.sql"),
+  "utf8",
+);
 
 /** Extract the latest RPC definition when the generated bundle includes 0008 and 0010. */
 function functionDdl(source: string): string {
@@ -64,10 +68,19 @@ describe("docs/setup/service-requests-migration.sql — hardened manual migratio
     expect(file.match(/CREATE OR REPLACE FUNCTION public\.ofoq_client_service_request\(/g)).toHaveLength(1);
   });
 
-  it("carries the hardened client-dashboard replacement in the manual SQL and the bundle", () => {
+  it("carries the hardened client-dashboard replacement in the manual SQL", () => {
+    // The manual copy stays at the 0010 hardening level …
     expect(dashboardDdl(file)).toBe(dashboardDdl(migration));
-    expect(dashboardDdl(file)).toBe(dashboardDdl(bundle));
     expect(dashboardDdl(file)).toContain("o.status IN ('SENT', 'APPROVED', 'REJECTED')");
     expect(dashboardDdl(file)).not.toContain("o.status NOT IN ('CANCELLED', 'EXPIRED')");
+  });
+
+  it("keeps the offer hardening in the newest dashboard of the bundle (0011)", () => {
+    // … while the generated bundle now carries the 0011 replacement, which adds
+    // the project plan to the client dashboard and keeps the offer allowlist.
+    expect(dashboardDdl(bundle)).toBe(dashboardDdl(projectPlanMigration));
+    expect(dashboardDdl(bundle)).toContain("o.status IN ('SENT', 'APPROVED', 'REJECTED')");
+    expect(dashboardDdl(bundle)).not.toContain("o.status NOT IN ('CANCELLED', 'EXPIRED')");
+    expect(dashboardDdl(bundle)).toContain("public.project_plans");
   });
 });
