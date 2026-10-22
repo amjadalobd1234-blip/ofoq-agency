@@ -148,8 +148,14 @@ function isExpired(offer: OfferRow): boolean {
   return Boolean(offer.valid_until && offer.valid_until <= nowIso());
 }
 
+/**
+ * An offer may only be sent, accepted or invoiced when it carries a real,
+ * positive published price. `null` means "not priced yet" (an unpublished
+ * request); `0` means the pricing engine produced nothing — neither may reach
+ * the client as an official offer.
+ */
 function assertPriced(offer: OfferRow): void {
-  if (offer.total_minor === null || offer.subtotal_minor === null) {
+  if (offer.total_minor === null || offer.subtotal_minor === null || offer.total_minor <= 0) {
     throw new PreconditionError("This offer has no published price and cannot be sent or approved yet");
   }
 }
