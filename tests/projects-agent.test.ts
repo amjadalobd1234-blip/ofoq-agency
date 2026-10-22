@@ -352,3 +352,55 @@ describe("Projects Agent — delivery watch", () => {
     expect(taskAlert?.severity === "URGENT" || taskAlert?.severity === "IMPORTANT").toBe(true);
   });
 });
+
+describe("Projects Agent — a phase that only a draft carries", () => {
+  it("never counts or shows a task of a draft-only phase before the approval", async () => {
+    const created = await createManagedProject({
+      customerId,
+      title: "مشروع نسخة ثانية",
+      serviceSlug: "seo",
+      actor: owner,
+    });
+    const projectId = created.project.id;
+    await approvePlan(projectId, owner);
+
+    // The approved version, unchanged, plus one phase that exists only in a
+    // newer draft — exactly what a revision of an approved plan looks like.
+    const approved = await getPlanWithTasks(projectId);
+    const approvedPhases = parsePlanPhases(approved!.plan);
+    await savePlanDraft(
+      projectId,
+      owner,
+      {
+        phases: [
+          ...approvedPhases,
+          { key: "SECRET", title: "مرحلة المسودة", tasks: [{ title: "مهمة المسودة" }] },
+        ],
+      },
+      {},
+    );
+
+    const { listProjectTasks, findProjectById } = await import("@/lib/repositories/projects.repo");
+    const tasks = await listProjectTasks(projectId, { includeInternal: true });
+    const draftTask = tasks.find((task) => task.phase_key === "SECRET")!;
+    expect(draftTask).toBeTruthy();
+    await updateTaskWithNote(draftTask.id, { status: "DONE" }, owner);
+
+    // The committed tasks of the approved phases are all still TODO, so a rule
+    // that leaked the draft phase would report a progress above zero.
+    const { listTasksForProjects } = await import("@/lib/repositories/projects.repo");
+    const committed = await listTasksForProjects([projectId], { committedOnly: true });
+    expect(committed.some((task) => task.title === "مهمة المسودة")).toBe(false);
+    expect(committed.every((task) => task.status === "TODO")).toBe(true);
+
+    // The client view agrees: no draft task, no draft phase.
+    const view = await getClientProjectView(projectId, customerId, "ar");
+    expect(view.tasks.some((task) => task.title === "مهمة المسودة")).toBe(false);
+    expect(view.plan?.phases.map((phase) => phase.key)).not.toContain("SECRET");
+    expect(view.project.progress).toBe(0);
+
+    // The stored percentage follows the same committed tasks.
+    const project = await findProjectById(projectId);
+    expect(Number(project?.progress)).toBe(0);
+  });
+});

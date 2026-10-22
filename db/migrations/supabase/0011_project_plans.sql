@@ -10,7 +10,9 @@
 --     read, the plan is only served through the ownership-checked RPCs below.
 --   * ofoq_client_dashboard() is replaced so every project also carries the
 --     APPROVED plan (its phases and the client-visible tasks of each phase).
---     Internal tasks, internal notes and unapproved plans are never returned.
+--     Internal tasks, internal notes and unapproved plans are never returned,
+--     and a plan task is committed only when its phase belongs to an APPROVED
+--     plan — a phase that exists merely in a newer draft stays invisible.
 --   * ofoq_client_project_detail(p_project_id) — the client-safe view of one
 --     project: status, progress, client-visible tasks and the approved plan.
 --
@@ -214,12 +216,15 @@ BEGIN
           ) ORDER BY t.sort_order)
           FROM public.project_tasks AS t
           WHERE t.project_id = p.id AND t.visibility = 'CLIENT'
-            -- A task of a plan the owner has not approved is still a
-            -- proposal: it never reaches the client.
+            -- A plan task is committed only when its phase belongs to a plan
+            -- the owner has APPROVED. A task of a phase that exists merely in
+            -- a newer draft is still a proposal: it never reaches the client.
             AND (
               t.phase_key IS NULL
-              OR EXISTS (
-                SELECT 1 FROM public.project_plans AS approved_plan
+              OR t.phase_key IN (
+                SELECT approved_phase.value->>'key'
+                FROM public.project_plans AS approved_plan
+                CROSS JOIN LATERAL jsonb_array_elements(approved_plan.phases::jsonb) AS approved_phase(value)
                 WHERE approved_plan.project_id = p.id
                   AND approved_plan.status = 'APPROVED'
               )
@@ -367,10 +372,13 @@ BEGIN
   INTO v_tasks
   FROM public.project_tasks AS t
   WHERE t.project_id = v_project.id AND t.visibility = 'CLIENT'
+    -- Same rule as the dashboard: only a phase of an APPROVED plan commits.
     AND (
       t.phase_key IS NULL
-      OR EXISTS (
-        SELECT 1 FROM public.project_plans AS approved_plan
+      OR t.phase_key IN (
+        SELECT approved_phase.value->>'key'
+        FROM public.project_plans AS approved_plan
+        CROSS JOIN LATERAL jsonb_array_elements(approved_plan.phases::jsonb) AS approved_phase(value)
         WHERE approved_plan.project_id = v_project.id
           AND approved_plan.status = 'APPROVED'
       )
@@ -383,10 +391,13 @@ BEGIN
   INTO v_progress
   FROM public.project_tasks AS t
   WHERE t.project_id = v_project.id AND t.visibility = 'CLIENT'
+    -- The progress counts the same committed tasks the client is shown.
     AND (
       t.phase_key IS NULL
-      OR EXISTS (
-        SELECT 1 FROM public.project_plans AS approved_plan
+      OR t.phase_key IN (
+        SELECT approved_phase.value->>'key'
+        FROM public.project_plans AS approved_plan
+        CROSS JOIN LATERAL jsonb_array_elements(approved_plan.phases::jsonb) AS approved_phase(value)
         WHERE approved_plan.project_id = v_project.id
           AND approved_plan.status = 'APPROVED'
       )

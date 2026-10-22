@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db";
 import type { DbDriver } from "@/lib/db/types";
 import type {
+  ProjectPlanPhase,
   ProjectPlanRow,
   ProjectRow,
   ProjectServiceRow,
@@ -11,7 +12,7 @@ import type {
 } from "@/lib/domain/types";
 import { nowIso } from "@/lib/core/date";
 
-import { clean, findRowById, insertRow, updateRow } from "./base";
+import { clean, findRowById, insertRow, parseJson, updateRow } from "./base";
 
 export interface ProjectFilter {
   customerId?: string;
@@ -229,21 +230,43 @@ export async function listProjectTasks(
 /**
  * The rule of a task the client is allowed to see.
  *
- * A task that belongs to a plan (`phase_key` is set) only becomes visible once
- * the owner has approved a plan for that project: a draft plan is a proposal,
- * never a commitment. A task that belongs to no plan (added by hand, or
- * created by an older flow) stays visible exactly as before.
+ * A task that belongs to a plan (`phase_key` is set) is committed only when its
+ * phase belongs to the newest APPROVED plan of that project: a phase that
+ * exists merely in a newer draft is a proposal and never reaches the client.
+ * A task that belongs to no plan (added by hand, or created by an older flow)
+ * stays visible exactly as before.
+ *
+ * The rule is applied here, in the data layer, and mirrors
+ * `ofoq_client_dashboard()` / `ofoq_client_project_detail()` of migration 0011.
+ * It is expressed in JavaScript (not SQL) so the identical rule runs on SQLite
+ * and PostgreSQL — the plan phases are a JSON column on both.
  */
-const CLIENT_VISIBLE_TASK_SQL = `
-  visibility = 'CLIENT'
-  AND (
-    phase_key IS NULL
-    OR EXISTS (
-      SELECT 1 FROM project_plans AS approved_plan
-      WHERE approved_plan.project_id = project_tasks.project_id
-        AND approved_plan.status = 'APPROVED'
-    )
-  )`;
+async function approvedPhaseKeysByProject(
+  projectIds: string[],
+  driver: DbDriver,
+): Promise<Map<string, Set<string>>> {
+  const output = new Map<string, Set<string>>();
+  if (projectIds.length === 0) return output;
+  const placeholders = projectIds.map(() => "?").join(", ");
+  const plans = await driver.query<{ project_id: string; phases: string }>(
+    `SELECT project_id, phases FROM project_plans
+     WHERE project_id IN (${placeholders}) AND status = 'APPROVED'
+     ORDER BY version DESC`,
+    projectIds,
+  );
+  for (const plan of plans) {
+    // The first row per project is its newest approved version.
+    if (output.has(plan.project_id)) continue;
+    const phases = parseJson<ProjectPlanPhase[]>(plan.phases, []);
+    output.set(plan.project_id, new Set(phases.map((phase) => phase.key)));
+  }
+  return output;
+}
+
+function isCommittedClientTask(task: ProjectTaskRow, approvedKeys: Set<string> | undefined): boolean {
+  if (task.phase_key === null || task.phase_key === undefined) return true;
+  return approvedKeys?.has(task.phase_key) ?? false;
+}
 
 /** The tasks the client may see: committed work only, never a draft plan. */
 export async function listClientVisibleTasks(
@@ -251,11 +274,13 @@ export async function listClientVisibleTasks(
   db?: DbDriver,
 ): Promise<ProjectTaskRow[]> {
   const driver = db ?? (await getDb());
-  return driver.query<ProjectTaskRow>(
-    `SELECT * FROM project_tasks WHERE project_id = ? AND ${CLIENT_VISIBLE_TASK_SQL}
+  const rows = await driver.query<ProjectTaskRow>(
+    `SELECT * FROM project_tasks WHERE project_id = ? AND visibility = 'CLIENT'
      ORDER BY sort_order, created_at`,
     [projectId],
   );
+  const approvedKeys = (await approvedPhaseKeysByProject([projectId], driver)).get(projectId);
+  return rows.filter((task) => isCommittedClientTask(task, approvedKeys));
 }
 
 export async function deleteProjectTask(id: string, db?: DbDriver): Promise<void> {
@@ -272,28 +297,25 @@ export async function listTasksForProjects(
   if (projectIds.length === 0) return [];
   const driver = db ?? (await getDb());
   const placeholders = projectIds.map(() => "?").join(", ");
-  const where = options.includeInternal
-    ? ""
-    : options.committedOnly
-      ? `AND ${CLIENT_VISIBLE_TASK_SQL}`
-      : "AND visibility = 'CLIENT'";
-  return driver.query<ProjectTaskRow>(
+  const where = options.includeInternal ? "" : "AND visibility = 'CLIENT'";
+  const rows = await driver.query<ProjectTaskRow>(
     `SELECT * FROM project_tasks WHERE project_id IN (${placeholders}) ${where} ORDER BY sort_order, created_at`,
     projectIds,
   );
+  if (!options.committedOnly) return rows;
+  // `committedOnly` also drops the tasks of a phase that only a draft carries.
+  const approvedKeys = await approvedPhaseKeysByProject(projectIds, driver);
+  return rows.filter((task) => isCommittedClientTask(task, approvedKeys.get(task.project_id)));
 }
 
 /** Recomputes project progress from the CLIENT-visible task completion. */
 export async function recomputeProgress(projectId: string, db?: DbDriver): Promise<number> {
   const driver = db ?? (await getDb());
-  const row = await driver.get<{ total: number; done: number }>(
-    `SELECT COUNT(*) AS total,
-            SUM(CASE WHEN status = 'DONE' THEN 1 ELSE 0 END) AS done
-     FROM project_tasks WHERE project_id = ? AND ${CLIENT_VISIBLE_TASK_SQL}`,
-    [projectId],
-  );
-  const total = Number(row?.total ?? 0);
-  const done = Number(row?.done ?? 0);
+  // Count exactly the tasks the client is shown, so the percentage never
+  // reflects work that only a draft plan mentions.
+  const tasks = await listClientVisibleTasks(projectId, driver);
+  const total = tasks.length;
+  const done = tasks.filter((task) => task.status === "DONE").length;
   const progress = total === 0 ? 0 : Math.round((done / total) * 100);
   await driver.run("UPDATE projects SET progress = ?, updated_at = ? WHERE id = ?", [
     progress,

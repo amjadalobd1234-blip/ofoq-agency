@@ -40,8 +40,12 @@ export class PostgresDriver implements DbDriver {
       types?: { setTypeParser(oid: number, parser: (value: string) => unknown): void };
     };
     try {
-      // @ts-expect-error -- pg is dynamically imported to keep SQLite startup lazy.
-      pgModule = (await import(/* webpackIgnore: true */ "pg")) as never;
+      // @ts-expect-error -- pg is imported lazily so a SQLite deployment never
+      // loads it. It stays a runtime `require` (see `serverExternalPackages`
+      // in next.config.ts) and the bundler therefore traces node_modules/pg
+      // into the deployed function; a `webpackIgnore` import would be invisible
+      // to that trace and the driver would fail on a serverless deployment.
+      pgModule = (await import("pg")) as never;
     } catch (error) {
       throw new Error(
         "PostgreSQL was selected (DATABASE_DRIVER=postgres), but the 'pg' package is not installed. " +

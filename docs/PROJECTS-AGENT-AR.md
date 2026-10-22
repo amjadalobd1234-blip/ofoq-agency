@@ -135,6 +135,16 @@
   الترحيلات 0001 → 0010 ثم 0011 على محرك PostgreSQL حقيقي، ويُقارَن ناتج
   `ofoq_client_dashboard()` قبل وبعد 0011 (نفس العروض، نفس الفواتير، نفس العميل)،
   مع إثبات أن 0011 **يضيف** أسطرًا فقط ولا يحذف ولا يعدّل من إسقاط 0010.
+- `tests/project-plans-draft-phase-visibility.test.ts` — مهمة تنتمي إلى مرحلة موجودة
+  في **مسودة أحدث** لا تظهر في البوابة ولا في `ofoq_client_project_detail()` ولا
+  تُحتسب في نسبة الإنجاز قبل اعتماد المالك للنسخة الجديدة.
+- `tests/projects-postgres-driver.test.ts` — **سائق Postgres الإنتاجي نفسه**
+  (`src/lib/db/postgres.ts`: `create`، ترجمة `?` → `$n`، محلّل int8، المعاملات) على
+  محرك PostgreSQL حقيقي، مع تطبيق الترحيلات عبر `runMigrations` (أي مسار
+  `npm run db:migrate`) ثم الدورة الكاملة عبر HTTP.
+- `tests/projects-live-database.test.ts` — فحص **قراءة فقط** لقاعدة الإنتاج، لا يعمل
+  إلا بتفعيل صريح: `OFOQ_LIVE_DB_TEST=1 DATABASE_URL=…`. يتحقق من الجداول والأعمدة
+  ووجود `ofoq_client_project_detail` وسياسة RLS — دون أي كتابة أو ترحيل.
 
 ## ملاحظات تشغيلية
 

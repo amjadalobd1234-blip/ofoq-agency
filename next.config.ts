@@ -50,7 +50,12 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
-  serverExternalPackages: ["better-sqlite3"],
+  // Both are runtime-only server dependencies: `better-sqlite3` is a native
+  // module, and `pg` is loaded lazily by the PostgreSQL driver when
+  // DATABASE_URL is configured. Keeping them external also makes the file
+  // trace of the deployed routes include them — without this, a serverless
+  // deployment could ship the driver without the `pg` package.
+  serverExternalPackages: ["better-sqlite3", "pg"],
   logging: {
     fetches: { fullUrl: false },
   },
