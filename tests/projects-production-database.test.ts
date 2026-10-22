@@ -42,6 +42,7 @@ const { closeDb, setDbForTesting } = await import("../src/lib/db");
 const { getEnv } = await import("../src/lib/config/env");
 const { ConfigurationError } = await import("../src/lib/core/errors");
 const { GET: listProjects } = await import("../src/app/api/projects/route");
+const { GET: listAds } = await import("../src/app/api/ads/route");
 const { testDriver } = await import("./setup");
 
 const ENV_KEYS = ["NODE_ENV", "DATABASE_DRIVER", "DATABASE_URL", "SQLITE_PATH"] as const;
@@ -114,5 +115,20 @@ describe("the production database configuration", () => {
     expect(body.error).toMatch(/DEPLOY-AR/);
     // No internal detail (the file path) leaks into the answer.
     expect(body.error).not.toContain("/proc");
+  });
+
+  it("answers 503 on /api/ads too when the production store is unusable", async () => {
+    setEnv("NODE_ENV", "production");
+    setEnv("DATABASE_DRIVER", "postgres");
+    delete process.env.DATABASE_URL;
+
+    const response = await listAds(
+      new Request("http://localhost/api/ads", { headers: { "x-test-user": "u-owner" } }),
+    );
+
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as { error: string; code: string };
+    expect(body.code).toBe("CONFIGURATION_ERROR");
+    expect(body.error).toMatch(/DATABASE_URL/);
   });
 });

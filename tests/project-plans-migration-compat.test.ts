@@ -439,3 +439,125 @@ describe("migration 0011 — what it changes in the dashboard", () => {
     );
   });
 });
+
+describe("migration 0012 on top of 0011 — compatibility", () => {
+  let after0012: Record<string, any>;
+  let functionsAfter0012: string[];
+  let policiesAfter0012: string[];
+
+  beforeAll(async () => {
+    await db.exec(
+      fs.readFileSync(path.join(process.cwd(), "db", "migrations", "supabase", "0012_ad_plans.sql"), "utf8"),
+    );
+    await db.query(
+      `INSERT INTO public.ad_plans
+         (id, code, customer_id, project_id, family_key, version, status, locale, currency, summary, body, forecasts,
+          internal_note, review_note, created_by_user_id, created_by_agent, approved_by_user_id, approved_at, created_at, updated_at)
+       VALUES
+         ('ad-approved', 'OFQ-AD-001', $1, NULL, $1, 1, 'APPROVED', 'ar', 'USD', 'خطة إعلانية معتمدة',
+          '{"disclaimerAr":"استشارية","objective":"MESSAGES","secretInternal":"مفتاح سري داخل المتن"}',
+          '{"isEstimate":true,"disclaimerAr":"تقديرات","secretInternal":"توقع سري"}',
+          'ملاحظة داخلية سرية', 'مراجعة المالك', $3, 'ads_manager', $3, $2, $2, $2),
+         ('ad-draft', 'OFQ-AD-001', $1, NULL, $1, 2, 'DRAFT', 'ar', 'USD', 'مسودة إعلانية',
+          '{"disclaimerAr":"مسودة"}', NULL, 'مسودة داخلية', NULL, $3, 'ads_manager', NULL, NULL, $2, $2),
+         ('ad-other', 'OFQ-AD-002', $4, NULL, $4, 1, 'APPROVED', 'ar', 'USD', 'خطة عميل آخر',
+          '{"disclaimerAr":"أخرى"}', NULL, 'داخلي للآخر', NULL, $3, 'ads_manager', $3, $2, $2, $2)`,
+      [CUSTOMER_ID, NOW, OWNER_ID, OTHER_CUSTOMER_ID],
+    );
+    await db.query(
+      `INSERT INTO public.campaigns
+         (id, customer_id, platform, name, status, currency, total_budget_minor, daily_budget_minor, monthly_budget_minor,
+          spent_minor, sync_status, created_at, updated_at)
+       VALUES
+         ('camp-draft', $1, 'META_ADS', 'حملة مسودة', 'DRAFT', 'USD', 1000, 100, 1000, 0, 'NOT_CONNECTED', $2, $2),
+         ('camp-pending', $1, 'META_ADS', 'حملة بانتظار الموافقة', 'PENDING_APPROVAL', 'USD', 1000, 100, 1000, 0, 'NOT_CONNECTED', $2, $2),
+         ('camp-active', $1, 'META_ADS', 'حملة ظاهرة', 'ACTIVE', 'USD', 1000, 100, 1000, 0, 'NOT_CONNECTED', $2, $2)`,
+      [CUSTOMER_ID, NOW],
+    );
+    const inventory = await objectInventory();
+    functionsAfter0012 = inventory.functions;
+    policiesAfter0012 = inventory.policies;
+    after0012 = decodeJsonRecord(
+      await callAsAuthenticated<unknown>(CLIENT_ID, "SELECT public.ofoq_client_dashboard() AS result"),
+    );
+  });
+
+  it("applies on a database that already carries 0010 and 0011", () => {
+    expect(functionsAfter0012).toContain("ofoq_client_dashboard");
+    expect(functionsAfter0012).toContain("ofoq_client_project_detail");
+  });
+
+  it("keeps every object 0010 and 0011 created", () => {
+    for (const name of functionsAfter) expect(functionsAfter0012).toContain(name);
+    for (const name of policiesAfter) expect(policiesAfter0012).toContain(name);
+  });
+
+  it("does not grant direct table access to ads plans or offers", async () => {
+    const privileges = await db.query<{ ads: boolean; results: boolean; offers: boolean }>(
+      `SELECT has_table_privilege('authenticated', 'public.ad_plans', 'SELECT') AS ads,
+              has_table_privilege('authenticated', 'public.ad_plan_results', 'SELECT') AS results,
+              has_table_privilege('authenticated', 'public.offers', 'SELECT') AS offers`,
+    );
+    expect(privileges.rows[0]).toEqual({ ads: false, results: false, offers: false });
+  });
+
+  it("keeps DRAFT offers, unapproved project plans and the other customer's data hidden", () => {
+    const json = JSON.stringify(after0012);
+    expect((after0012.offers as Record<string, any>[]).map((offer) => offer.code).sort()).toEqual([
+      "OFQ-O-APPROVED",
+      "OFQ-O-REJECTED",
+      "OFQ-O-SENT",
+    ]);
+    expect(json).not.toContain("OFQ-O-DRAFT");
+    expect(json).not.toContain("OFQ-O-OTHER");
+    expect(json).not.toContain("مشروع العميل الآخر");
+    expect(json).not.toContain("شركة أخرى");
+    for (const marker of INTERNAL_MARKERS) expect(json).not.toContain(marker);
+
+    const project = (after0012.projects as Record<string, any>[]).find((row) => row.id === PROJECT_ID)!;
+    expect(project.plan).toMatchObject({ version: 1, status: "APPROVED" });
+    expect(project.plan.summary).not.toBe("مسودة أحدث");
+    const draftProject = (after0012.projects as Record<string, any>[]).find((row) => row.id === DRAFT_PROJECT_ID)!;
+    expect(draftProject.plan).toBeNull();
+  });
+
+  it("returns only the client's latest APPROVED ads plan and hides drafts, secrets and draft campaigns", () => {
+    const json = JSON.stringify(after0012);
+    const plans = after0012.adPlans as Record<string, any>[];
+    expect(plans.map((row) => row.id)).toEqual(["ad-approved"]);
+    expect(plans[0]!.status).toBe("APPROVED");
+    expect(plans[0]!.body.objective).toBe("MESSAGES");
+    expect(plans[0]!.body.secretInternal).toBeUndefined();
+    expect(json).not.toContain("ملاحظة داخلية سرية");
+    expect(json).not.toContain("مسودة إعلانية");
+    expect(json).not.toContain("مفتاح سري داخل المتن");
+    expect(json).not.toContain("توقع سري");
+    expect(json).not.toContain("خطة عميل آخر");
+    expect((after0012.campaigns as Record<string, any>[]).map((row) => row.id)).toEqual(["camp-active"]);
+  });
+
+  it("keeps ofoq_client_project_detail owned by the customer after 0012", async () => {
+    const detail = decodeJsonRecord(
+      await callAsAuthenticated<unknown>(
+        CLIENT_ID,
+        "SELECT public.ofoq_client_project_detail($1) AS result",
+        [PROJECT_ID],
+      ),
+    );
+    expect(detail.plan).toMatchObject({ status: "APPROVED" });
+    expect(JSON.stringify(detail)).not.toContain("مهمة داخلية");
+  });
+
+  it("keeps the offers projection of 0011", () => {
+    const block = (file: string): string => {
+      const source = fs.readFileSync(path.join(process.cwd(), file), "utf8");
+      const start = source.lastIndexOf("CREATE OR REPLACE FUNCTION public.ofoq_client_dashboard(");
+      const end = source.indexOf("$function$;", start);
+      const fn = source.slice(start, end);
+      return fn.slice(fn.indexOf("INTO v_offers"), fn.indexOf("INTO v_invoices"));
+    };
+    expect(block("db/migrations/supabase/0012_ad_plans.sql")).toBe(
+      block("db/migrations/supabase/0011_project_plans.sql"),
+    );
+  });
+});

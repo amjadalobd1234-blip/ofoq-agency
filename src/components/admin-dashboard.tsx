@@ -6,6 +6,7 @@ import { normalizeAdminDashboard, type AdminDashboardData } from "@/lib/admin/pa
 import type { Locale } from "@/lib/domain/types";
 import { dictionaries } from "@/lib/i18n/dictionaries";
 
+import { AdminAds } from "./admin-ads";
 import { AdminProjects } from "./admin-projects";
 
 /** Offer statuses that still need a response from the agency (incl. accepted offers awaiting the owner's invoice decision). */
@@ -194,8 +195,8 @@ export function AdminDashboard({ locale }: { locale: Locale }) {
         </section>}
 
         {(activeTab === "overview" || activeTab === "campaigns") && <section className="platform-card content-card" id="campaigns">
-          <div className="card-heading-row"><div><span className="eyebrow">04 / {ar ? "الحملات" : "Campaigns"}</span><h2>{ar ? "الحملات الإعلانية" : "Advertising campaigns"}</h2></div><span className="integration-status">{ar ? "Google Ads غير مربوط" : "Google Ads not connected"}</span></div>
-          {data.campaigns.length === 0 ? <EmptyAdmin text={ar ? "لا توجد حملات مسجلة. لا يتم جلب أو اختلاق بيانات إعلانية." : "No campaigns are recorded. Ad data is never fabricated."} /> : <div className="compact-list">{data.campaigns.map((campaign) => <article className="compact-row" key={campaign.id}><div className="compact-row-copy"><strong>{campaign.name}</strong><span>{campaign.customerName} · {campaign.platform.replaceAll("_", " ")}</span></div><div className="compact-row-side"><strong>{formatMoney(campaign.spentMinor, campaign.currency, locale)}</strong><StatusLabel status={campaign.status} locale={locale} /></div></article>)}</div>}
+          <div className="card-heading-row"><div><span className="eyebrow">04 / {ar ? "الحملات" : "Campaigns"}</span><h2>{ar ? "الخطط الإعلانية" : "Advertising plans"}</h2><p className="card-subtitle">{ar ? "وكيل الإعلانات استشاري: يقترح الخطة، والمالك يعتمدها. لا إطلاق ولا إنفاق من المنصة." : "The ads agent is advisory: it proposes a plan, the owner approves it. The platform never launches or spends."}</p></div><span className="integration-status">{ar ? "Meta / Google / TikTok غير مربوطة" : "Meta / Google / TikTok not connected"}</span></div>
+          <AdminAds locale={locale} clients={data.clients} />
         </section>}
 
         {(activeTab === "overview" || activeTab === "reports") && <section className="platform-card content-card" id="reports">

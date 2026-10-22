@@ -51,6 +51,34 @@ export type RiskLevel = "LOW" | "MEDIUM" | "HIGH";
  */
 export type ProjectPlanStatus = "DRAFT" | "AWAITING_APPROVAL" | "APPROVED" | "SUPERSEDED";
 
+/**
+ * Ads-plan lifecycle (وكيل الإعلانات).
+ *
+ * DRAFT              → the agent (or staff) is writing a proposal.
+ * AWAITING_APPROVAL  → submitted; waiting for the owner's decision.
+ * APPROVED           → the owner approved it; only now is it shown to the client.
+ * SUPERSEDED         → an older approved version, kept for the audit trail.
+ */
+export type AdPlanStatus = "DRAFT" | "AWAITING_APPROVAL" | "APPROVED" | "SUPERSEDED";
+
+export type AdBusinessCategory =
+  | "LOCAL_RETAIL"
+  | "RESTAURANT"
+  | "SERVICES"
+  | "PROFESSIONAL"
+  | "ECOMMERCE"
+  | "CONTENT"
+  | "REAL_ESTATE"
+  | "EDUCATION"
+  | "HEALTH"
+  | "OTHER";
+
+export type AdObjective = "AWARENESS" | "TRAFFIC" | "ENGAGEMENT" | "MESSAGES" | "LEADS" | "SALES";
+
+export type AdPlanPlatform = "META_ADS" | "GOOGLE_ADS" | "TIKTOK";
+
+export type AdResultPlatform = AdPlanPlatform | "ALL";
+
 export type OfferStatus = "DRAFT" | "SENT" | "APPROVED" | "REJECTED" | "EXPIRED" | "CANCELLED";
 
 export type InvoiceStatus =
@@ -299,6 +327,145 @@ export interface ProjectPlanRow {
   review_note: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** One platform's share of an advertising plan. Percents across a plan sum to 100. */
+export interface AdPlatformAllocation {
+  platform: AdPlanPlatform;
+  percent: number;
+  dailyBudgetMinor: number;
+  totalBudgetMinor: number;
+  rationale: string;
+}
+
+export interface AdAudience {
+  description: string;
+  geo: string[];
+  ageMin: number | null;
+  ageMax: number | null;
+  interests: string[];
+  rationale: string;
+}
+
+export interface AdIdea {
+  title: string;
+  format: string;
+  description: string;
+}
+
+export interface AdCopyBlock {
+  platform: AdPlanPlatform;
+  headline: string;
+  primaryText: string;
+  cta: string;
+}
+
+export interface AdKpi {
+  key: string;
+  labelAr: string;
+  labelEn: string;
+  target: string | null;
+  rationale: string;
+}
+
+/**
+ * The advisory plan document stored as JSON on `ad_plans.body`.
+ *
+ * Budgets are integer USD cents. Forecasts live in a separate column so the
+ * disclaimer cannot be dropped by a partial edit.
+ */
+export interface AdPlanBody {
+  brief: string;
+  businessCategory: AdBusinessCategory;
+  objective: AdObjective;
+  audience: AdAudience;
+  platforms: AdPlatformAllocation[];
+  durationDays: number;
+  dailyBudgetMinor: number;
+  totalBudgetMinor: number;
+  currency: "USD";
+  adIdeas: AdIdea[];
+  adCopy: AdCopyBlock[];
+  kpis: AdKpi[];
+  analysis: { business: string; audience: string; platformRationale: string };
+  disclaimerAr: string;
+  disclaimerEn: string;
+}
+
+export interface AdPlatformForecast {
+  platform: AdPlanPlatform;
+  impressionsLow: number;
+  impressionsHigh: number;
+  clicksLow: number;
+  clicksHigh: number;
+  messagesLow: number;
+  messagesHigh: number;
+  ordersLow: number;
+  ordersHigh: number;
+  cpcLowMinor: number;
+  cpcHighMinor: number;
+}
+
+export interface AdForecasts {
+  isEstimate: true;
+  disclaimerAr: string;
+  disclaimerEn: string;
+  platforms: AdPlatformForecast[];
+  totals: {
+    impressionsLow: number;
+    impressionsHigh: number;
+    clicksLow: number;
+    clicksHigh: number;
+    messagesLow: number;
+    messagesHigh: number;
+    ordersLow: number;
+    ordersHigh: number;
+  };
+}
+
+export interface AdPlanRow {
+  id: string;
+  code: string;
+  customer_id: string;
+  project_id: string | null;
+  family_key: string;
+  version: number;
+  status: AdPlanStatus;
+  locale: Locale;
+  currency: string;
+  summary: string | null;
+  body: string;
+  forecasts: string | null;
+  internal_note: string | null;
+  review_note: string | null;
+  created_by_user_id: string | null;
+  created_by_agent: string | null;
+  approved_by_user_id: string | null;
+  approved_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdPlanResultRow {
+  id: string;
+  ad_plan_id: string;
+  customer_id: string;
+  result_date: string;
+  platform: AdResultPlatform;
+  spend_minor: number;
+  impressions: number;
+  clicks: number;
+  messages: number;
+  orders: number;
+  source: "MANUAL";
+  notes: string | null;
+  created_by_user_id: string | null;
+  created_at: string;
+}
+
+export interface AdPlanWithCustomer extends AdPlanRow {
+  customer_name: string | null;
+  customer_company: string | null;
 }
 
 export interface OfferRow {
@@ -631,6 +798,8 @@ export interface ReportRow {
   customer_id: string;
   project_id: string | null;
   campaign_id: string | null;
+  /** Optional link to an advertising plan (وكيل الإعلانات). */
+  ad_plan_id: string | null;
   report_type: ReportType;
   language: string;
   period_start: string | null;
